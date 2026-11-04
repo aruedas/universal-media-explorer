@@ -41,6 +41,17 @@ subprojects {
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
         }
         jvmArgs("--enable-native-access=ALL-UNNAMED")
+        // Test JVMs get their own config tree. The transfer engine, the site
+        // list and the playback store all live under %APPDATA% and are written
+        // by the shared instances a test drives — pointed at the real folder
+        // they would overwrite whoever runs the suite.
+        val testConfig = layout.buildDirectory.dir("test-config")
+        systemProperty("dock.config.dir", testConfig.get().asFile.absolutePath)
+        doFirst {
+            val dir = testConfig.get().asFile
+            dir.deleteRecursively()
+            dir.mkdirs()
+        }
     }
 
     tasks.withType<JavaExec>().configureEach {

@@ -8,7 +8,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** The %APPDATA% rename: a legacy Dock tree moves over on first use. */
+/** The %APPDATA% rename: legacy Dock and Universal Explorer trees move over on first use. */
 class AppPathsTest {
 
     @Test
@@ -16,7 +16,7 @@ class AppPathsTest {
         Path appdata = tmp.resolve("Roaming");
         Path legacy = Files.createDirectories(appdata.resolve("Dock"));
         Files.writeString(legacy.resolve("sessions.json"), "{}");
-        Path fresh = appdata.resolve("Universal Explorer");
+        Path fresh = appdata.resolve("Universal Media Explorer");
         AppPaths.override(fresh);
         try {
             Path config = AppPaths.config();
@@ -29,10 +29,28 @@ class AppPathsTest {
     }
 
     @Test
+    void aLegacyUniversalExplorerFolderMovesOverOnFirstUse(@TempDir Path tmp) throws Exception {
+        Path appdata = tmp.resolve("Roaming");
+        Path legacy = Files.createDirectories(appdata.resolve("Universal Explorer"));
+        Files.writeString(legacy.resolve("sessions.json"), "{\"migrated\":true}");
+        Path fresh = appdata.resolve("Universal Media Explorer");
+        AppPaths.override(fresh);
+        try {
+            Path config = AppPaths.config();
+            assertEquals(fresh, config);
+            assertEquals("{\"migrated\":true}",
+                    Files.readString(config.resolve("sessions.json")));
+            assertFalse(Files.exists(legacy), "the Universal Explorer folder must not linger");
+        } finally {
+            AppPaths.override(null);
+        }
+    }
+
+    @Test
     void anExistingFolderWinsOverALingeringLegacy(@TempDir Path tmp) throws Exception {
         Path appdata = tmp.resolve("Roaming");
         Files.createDirectories(appdata.resolve("Dock"));
-        Path fresh = Files.createDirectories(appdata.resolve("Universal Explorer"));
+        Path fresh = Files.createDirectories(appdata.resolve("Universal Media Explorer"));
         Files.writeString(fresh.resolve("sessions.json"), "{\"kept\":true}");
         AppPaths.override(fresh);
         try {
