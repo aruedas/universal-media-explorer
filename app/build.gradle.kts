@@ -312,9 +312,9 @@ tasks.register<JavaExec>("icon") {
 /**
  * A self-contained app for this OS in build/package (jpackage): its own
  * Java runtime, the bundled LibVLC beside the jars (VlcRuntime finds it
- * there), and the app icon. macOS gets "Universal Explorer.app", Windows
- * and Linux their app-image folder. Unsigned — fine for the machine that
- * built it.
+ * there), and the app icon. macOS gets "Universal Media Explorer.app",
+ * Windows and Linux their app-image folder. Unsigned — fine for the
+ * machine that built it.
  */
 tasks.register("packageApp") {
     group = "distribution"
@@ -359,13 +359,13 @@ tasks.register("packageApp") {
         val jpackage = File(jdk.get(), "bin/jpackage" + if (isWindowsHost) ".exe" else "")
         val args = mutableListOf(jpackage.path,
                 "--type", "app-image",
-                "--name", "Universal Explorer",
+                "--name", "Universal Media Explorer",
                 "--dest", out.path,
                 "--input", input.path,
                 "--main-jar", appJar.get().asFile.name,
                 "--main-class", "dock.DockApp",
                 "--icon", icon.path,
-                "--vendor", "Universal Explorer contributors",
+                "--vendor", "Universal Media Explorer contributors",
                 "--java-options", "--enable-native-access=ALL-UNNAMED",
                 "--java-options", "-Dfile.encoding=UTF-8")
         if (isMacHost) {
@@ -444,7 +444,7 @@ tasks.register("packageMsi") {
     val jdk = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
             .map { it.metadata.installationPath.asFile }
     doLast {
-        val image = File(layout.buildDirectory.asFile.get(), "package/Universal Explorer")
+        val image = File(layout.buildDirectory.asFile.get(), "package/Universal Media Explorer")
         val out = File(layout.buildDirectory.asFile.get(), "dist")
         deleteForPackaging(out)
         out.mkdirs()
@@ -453,10 +453,10 @@ tasks.register("packageMsi") {
                 "--type", "msi",
                 "--app-image", image.path,
                 "--dest", out.path,
-                "--name", "Universal Explorer",
+                "--name", "Universal Media Explorer",
                 "--app-version", project.version.toString(),
-                "--vendor", "Universal Explorer contributors",
-                "--win-menu", "--win-menu-group", "Universal Explorer",
+                "--vendor", "Universal Media Explorer contributors",
+                "--win-menu", "--win-menu-group", "Universal Media Explorer",
                 pathPrepend = wixDir.get().asFile)
         logger.lifecycle("Installer: ${msiIn(out).path}")
     }
@@ -472,12 +472,12 @@ tasks.register("installApp") {
         if (isWindowsHost) {
             msiexecElevated("i", msiIn(File(layout.buildDirectory.asFile.get(), "dist")))
             val exe = File(System.getenv("ProgramFiles") ?: "C:\\Program Files",
-                    "Universal Explorer/Universal Explorer.exe")
+                    "Universal Media Explorer/Universal Media Explorer.exe")
             check(exe.isFile) { "msiexec reported success but ${exe.path} is missing" }
             logger.lifecycle("Installed: ${exe.parentFile.path}")
         } else if (isMacHost) {
-            val app = File(layout.buildDirectory.asFile.get(), "package/Universal Explorer.app")
-            val target = File("/Applications/Universal Explorer.app")
+            val app = File(layout.buildDirectory.asFile.get(), "package/Universal Media Explorer.app")
+            val target = File("/Applications/Universal Media Explorer.app")
             target.deleteRecursively()
             val p = ProcessBuilder("ditto", app.path, target.path).redirectErrorStream(true).start()
             val text = p.inputStream.bufferedReader().readText()
@@ -497,11 +497,11 @@ tasks.register("uninstallApp") {
     doLast {
         if (isWindowsHost) {
             msiexecElevated("x", msiIn(File(layout.buildDirectory.asFile.get(), "dist")))
-            val dir = File(System.getenv("ProgramFiles") ?: "C:\\Program Files", "Universal Explorer")
+            val dir = File(System.getenv("ProgramFiles") ?: "C:\\Program Files", "Universal Media Explorer")
             check(!dir.isDirectory) { "msiexec reported success but ${dir.path} still exists" }
             logger.lifecycle("Removed: ${dir.path}")
         } else if (isMacHost) {
-            val target = File("/Applications/Universal Explorer.app")
+            val target = File("/Applications/Universal Media Explorer.app")
             target.deleteRecursively()
             logger.lifecycle("Removed: ${target.path}")
         } else {

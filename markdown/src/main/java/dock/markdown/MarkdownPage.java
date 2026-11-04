@@ -271,7 +271,7 @@ public final class MarkdownPage extends JPanel {
             java.net.http.HttpRequest request = java.net.http.HttpRequest
                     .newBuilder(java.net.URI.create(url))
                     .timeout(java.time.Duration.ofSeconds(10))
-                    .header("User-Agent", "Universal Explorer markdown reader")
+                    .header("User-Agent", "Universal Media Explorer markdown reader")
                     .GET().build();
             java.net.http.HttpResponse<InputStream> response = HTTP.send(request,
                     java.net.http.HttpResponse.BodyHandlers.ofInputStream());

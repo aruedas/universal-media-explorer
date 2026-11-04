@@ -1,15 +1,15 @@
 # Security policy
 
-Universal Explorer handles your credentials and your files, so
+Universal Media Explorer handles your credentials and your files, so
 security-relevant bugs are taken seriously even though this is a
 hobby-scale project.
 
 ## Scope
 
 - Credential storage: the Windows Credential Manager integration
-  (targets `Universal Explorer/<site>` and `/key`), and the in-memory
-  lifetime of secrets — passwords and passphrases must never reach
-  disk, logs, or test output.
+  (targets `Universal Media Explorer/<site>` and `/key`), and the
+  in-memory lifetime of secrets — passwords and passphrases must never
+  reach disk, logs, or test output.
 - Protocol handling: parsing of server responses on all five protocols
   (SFTP/SSH, SMB, WebDAV, FTP, S3 XML), including the hand-rolled
   SigV4 signer in `:s3`.

@@ -1,9 +1,10 @@
 package dock.core.config;
 
 /**
- * The wire protocols Universal Explorer speaks. New protocols join here first; the
- * connect dialog, session store and launcher all key off this enum, and
- * per-protocol code (fs backends, specs) hangs off the value.
+ * The wire protocols Universal Media Explorer speaks. New protocols join
+ * here first; the connect dialog, session store and launcher all key off
+ * this enum, and per-protocol code (fs backends, specs) hangs off the
+ * value.
  */
 public enum Protocol {
     SFTP("SFTP", 22),

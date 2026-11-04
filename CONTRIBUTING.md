@@ -1,4 +1,4 @@
-# Contributing to Universal Explorer
+# Contributing to Universal Media Explorer
 
 Thanks for wanting to help. This is a personal project shared with the
 world — there is no company behind it, so review happens in spare time

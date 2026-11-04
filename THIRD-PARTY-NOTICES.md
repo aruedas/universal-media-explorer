@@ -1,6 +1,6 @@
 # Third-party notices
 
-Universal Explorer stands on the third-party components listed below.
+Universal Media Explorer stands on the third-party components listed below.
 Each component is governed by its own license; the project's own code is
 licensed under the GNU GPL v3 (see [LICENSE](LICENSE)).
 
