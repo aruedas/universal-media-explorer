@@ -37,6 +37,12 @@ public final class TerminalView extends JPanel {
         ThemeManager.addListener(term::repaint);
     }
 
+    /** Factory for the app module: wraps a local shell process in a terminal
+     *  panel without the caller needing JediTerm on its compile classpath. */
+    public static TerminalView forLocalShell(LocalShell shell) {
+        return new TerminalView(shell);
+    }
+
     public void close() {
         term.close();
         channel.close();
@@ -98,7 +104,7 @@ public final class TerminalView extends JPanel {
         }
 
         private static boolean dark() {
-            return ThemeManager.mode() == ThemeManager.Mode.DARK;
+            return ThemeManager.mode() != ThemeManager.Mode.LIGHT;
         }
     }
 

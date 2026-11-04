@@ -47,6 +47,43 @@ public final class LocalShell implements TtyConnector {
         return new LocalShell(p, "local: " + shell, windows);
     }
 
+    /**
+     * Spawns a command in a specific directory. The command runs through the
+     * machine's shell so that environment variables and PATH resolution work
+     * as expected. Used by the toolkit action launcher to run PowerShell
+     * scripts in the current pane's directory.
+     */
+    public static LocalShell spawn(String command, String directory) throws IOException {
+        boolean windows = com.sun.jna.Platform.isWindows();
+        String shell = windows
+                ? System.getenv().getOrDefault("ComSpec", "cmd.exe")
+                : System.getenv().getOrDefault("SHELL", "/bin/sh");
+        ProcessBuilder pb = new ProcessBuilder(shell, windows ? "/c" : "-c", command)
+                .redirectErrorStream(true);
+        if (directory != null && !directory.isBlank()) {
+            pb.directory(new java.io.File(directory));
+        }
+        Process p = pb.start();
+        return new LocalShell(p, "local: " + command, windows);
+    }
+
+    /**
+     * Spawns a PowerShell command directly (no cmd.exe intermediary). Used by
+     * the toolkit action launcher so PowerShell scripts run natively with
+     * correct parsing, module loading, and WinForms support.
+     */
+    public static LocalShell spawnPowerShell(String command, String directory) throws IOException {
+        ProcessBuilder pb = new ProcessBuilder(
+                "powershell.exe", "-NoProfile", "-NoLogo", "-ExecutionPolicy", "Bypass",
+                "-Command", command)
+                .redirectErrorStream(true);
+        if (directory != null && !directory.isBlank()) {
+            pb.directory(new java.io.File(directory));
+        }
+        Process p = pb.start();
+        return new LocalShell(p, "powershell: " + command, true);
+    }
+
     @Override
     public int read(char[] buf, int off, int len) throws IOException {
         return out.read(buf, off, len);
