@@ -68,6 +68,11 @@ public final class Glyphs {
     public static final String SUN             = "\uF185";
     public static final String MOON            = "\uF186";
     public static final String SEARCH          = "\uF002";
+    public static final String TINT            = "\uF043";
+    public static final String BOLT            = "\uF0E7";
+    public static final String ASTERISK        = "\uF069";
+    public static final String CROSSHAIRS      = "\uF05B";
+    public static final String CLIPBOARD       = "\uF0EA";
     /** nf-fa-search-plus/minus, U+F00E/U+F010 — magnifiers with the +
      *  or −, the viewer's zoom controls. */
     public static final String SEARCH_PLUS     = "\uF00E";
