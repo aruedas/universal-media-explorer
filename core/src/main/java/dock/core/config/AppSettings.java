@@ -23,6 +23,11 @@ public final class AppSettings {
     /** Show the profiles of ~/.aws on the launcher, live (off by default). */
     public static final String AWS_PROFILES = "awsProfiles";
 
+    /** Where the PowerShell media toolkit lives; see
+     *  {@link ToolkitRoot#directory()}. Unset means fall back to the legacy
+     *  directory, then to no toolkit at all. */
+    public static final String TOOLKIT_ROOT = "toolkitRoot";
+
     private AppSettings() {}
 
     public static synchronized boolean flag(String key, boolean fallback) {
@@ -30,6 +35,18 @@ public final class AppSettings {
     }
 
     public static synchronized void setFlag(String key, boolean value) throws IOException {
+        put(key, value);
+    }
+
+    public static synchronized String text(String key, String fallback) {
+        return load().get(key) instanceof String s && !s.isBlank() ? s : fallback;
+    }
+
+    public static synchronized void setText(String key, String value) throws IOException {
+        put(key, value);
+    }
+
+    private static void put(String key, Object value) throws IOException {
         Map<String, Object> all = load();
         all.put(key, value);
         JSON.writerWithDefaultPrettyPrinter().writeValue(file().toFile(), all);
