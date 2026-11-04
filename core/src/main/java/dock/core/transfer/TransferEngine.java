@@ -33,6 +33,11 @@ public final class TransferEngine {
     private final Semaphore permits = new Semaphore(WORKERS);
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
     private final Object conflictLock = new Object();
+    private final QueuePersistence persistence;
+    /** Live connections and the saved site each came from — the queue file's
+     *  address book. An unmapped connection is a quick connect: nothing in
+     *  this run's queue that uses it can be re-dialled later. */
+    private final Map<FileSystem, String> sessionNames = new ConcurrentHashMap<>();
 
     private volatile ConflictResolver resolver = info -> ConflictDecision.once(ConflictRule.PROMPT);
 
@@ -43,7 +48,81 @@ public final class TransferEngine {
     }
 
     /** The app shell uses {@link #GLOBAL}; fresh engines exist for isolated runs (tests, tools). */
-    public TransferEngine() {}
+    public TransferEngine() {
+        this(new QueuePersistence());
+    }
+
+    /** An engine whose queue lives somewhere else — a test's own file. */
+    TransferEngine(QueuePersistence persistence) {
+        this.persistence = persistence;
+    }
+
+    /**
+     * Restores the persisted queue from disk. Call once on app startup.
+     * Rows whose remote session is not open yet come back waiting: they keep
+     * their place in the queue and start when {@link #sessionOpened} names
+     * that connection. Nothing here dials out by itself.
+     *
+     * @param localFs this machine's filesystem, standing in for "local"
+     * @return number of rows restored
+     */
+    public int restoreQueue(FileSystem localFs) {
+        return persistence.restoreInto(this, localFs, QueuePersistence.liveOf(sessionNames));
+    }
+
+    /**
+     * Records the saved site a connection came from, so its queue rows can be
+     * written down and found again. Call when a session opens.
+     */
+    public void nameSession(FileSystem fs, String site) {
+        if (fs != null && site != null && !site.isBlank()) sessionNames.put(fs, site);
+    }
+
+    public String sessionName(FileSystem fs) {
+        return fs == null ? null : sessionNames.get(fs);
+    }
+
+    /**
+     * Publishes a freshly opened connection to the waiting rows. A restored
+     * job holding a placeholder for {@code site} gets the live filesystem in
+     * its place; once both of its endpoints are real it rejoins the queue.
+     *
+     * @return the number of rows released by this connection
+     */
+    public int sessionOpened(String site, FileSystem fresh) {
+        nameSession(fresh, site);
+        int started = 0;
+        for (TransferJob job : jobs) {
+            if (job.state() != TransferJob.State.WAITING) continue;
+            if (!job.rebind(site, fresh) || job.holdsPlaceholder()) continue;
+            job.setState(TransferJob.State.QUEUED);
+            controls.put(job.id(), new Control());
+            submit(job);
+            started++;
+        }
+        if (started > 0) {
+            fireChanged();
+            saveQueue();
+        }
+        return started;
+    }
+
+    /**
+     * Hands a session's queue rows to the connection that replaced it after a
+     * reconnect. Running jobs keep the stream they already opened — pulling
+     * the ground out from under a transfer mid-buffer would lose more than it
+     * saves; it fails on its own terms and retries from its resume point.
+     */
+    public void sessionRebound(FileSystem dead, FileSystem fresh) {
+        nameSession(fresh, sessionNames.remove(dead));
+        for (TransferJob job : jobs) job.rebind(dead, fresh);
+        fireChanged();
+        saveQueue();
+    }
+
+    private void saveQueue() {
+        persistence.saveAsync(jobs, QueuePersistence.siteOf(sessionNames));
+    }
 
     public void setResolver(ConflictResolver resolver) {
         this.resolver = resolver == null
@@ -64,14 +143,21 @@ public final class TransferEngine {
      * than jumping each time a file completes. Batches older than the
      * window — including finished jobs from earlier bursts still listed in
      * the queue window — drop out entirely.
+     *
+     * Waiting rows (a restored job whose remote session is not open) count
+     * separately: they are neither in flight nor settled, so they light no
+     * burst, but the footer still has to say the queue is not empty.
      */
     public static Progress overall(List<TransferJob> jobs, long nowMillis, long recencyMillis) {
         boolean active = false;
+        int waiting = 0;
         Set<UUID> scope = new HashSet<>();
         for (TransferJob j : jobs) {
             if (j.isActive()) {
                 active = true;
                 scope.add(j.batchId());
+            } else if (j.state() == TransferJob.State.WAITING) {
+                waiting++;
             } else if (j.isFinished() && nowMillis - j.finishedAtMillis() <= recencyMillis) {
                 scope.add(j.batchId());
             }
@@ -98,7 +184,7 @@ public final class TransferEngine {
             else if (toRemote && !fromRemote) uploads++;
         }
         return new Progress(active, !scope.isEmpty(), running, queued, speed, done, total,
-                downloads, uploads);
+                downloads, uploads, waiting);
     }
 
     public void addListener(Runnable l) {
@@ -124,6 +210,7 @@ public final class TransferEngine {
         Control c = controls.get(id);
         if (c != null) c.paused = true;
         fireChanged();
+        saveQueue();
     }
 
     public void resume(UUID id) {
@@ -133,15 +220,20 @@ public final class TransferEngine {
             synchronized (c.monitor) { c.monitor.notifyAll(); }
         }
         fireChanged();
+        saveQueue();
     }
 
     public void cancel(UUID id) {
         TransferJob job = byId(id);
         if (job == null) return;
-        if (job.state() == TransferJob.State.QUEUED) {
+        // A queued row has no worker yet, and a waiting one has no live
+        // session to abort: both settle where they stand.
+        if (job.state() == TransferJob.State.QUEUED
+                || job.state() == TransferJob.State.WAITING) {
             job.settle(TransferJob.State.CANCELLED);
             controls.remove(id);
             fireChanged();
+            saveQueue();
             return;
         }
         Control c = controls.get(id);
@@ -153,13 +245,16 @@ public final class TransferEngine {
 
     public void retry(UUID id) {
         TransferJob job = byId(id);
-        if (job == null || job.isActive()) return;
+        // Waiting rows are not failed work: they have a session to open, not
+        // a transfer to restart. Submitting one would stream into a placeholder.
+        if (job == null || job.isActive() || job.state() == TransferJob.State.WAITING) return;
         job.setTransferred(0);
         job.setError(null);
         job.setState(TransferJob.State.QUEUED);
         controls.put(job.id(), new Control()); // the old one was removed at completion
         submit(job);
         fireChanged();
+        saveQueue();
     }
 
     public void pauseAll() {
@@ -180,6 +275,7 @@ public final class TransferEngine {
         jobs.removeIf(TransferJob::isFinished);
         controls.keySet().retainAll(jobs.stream().map(TransferJob::id).toList());
         fireChanged();
+        saveQueue();
     }
 
     public boolean hasActive(FileSystem fs) {
@@ -205,6 +301,27 @@ public final class TransferEngine {
     }
 
     // ---- execution ----
+
+    /**
+     * Adds a job restored from persistence. Unlike addJob, this does not
+     * trigger a save (we're loading, not changing) and a waiting row is not
+     * submitted — it holds a placeholder until its session opens.
+     *
+     * @return true when the row took effect: it is new, and a row that came
+     *         back live is either running or has been handed to a worker
+     */
+    boolean addRestoredJob(TransferJob job) {
+        if (byId(job.id()) != null) return false;
+        jobs.add(job);
+        if (job.isActive()) {
+            controls.put(job.id(), new Control());
+            if (job.state() == TransferJob.State.QUEUED) {
+                submit(job);
+            }
+        }
+        fireChanged();
+        return true;
+    }
 
     private void addJob(TransferJob job) {
         jobs.add(job);
@@ -233,10 +350,12 @@ public final class TransferEngine {
         if (ctl == null || ctl.cancelled) {
             job.settle(TransferJob.State.CANCELLED);
             fireChanged();
+            saveQueue();
             return;
         }
         job.setState(TransferJob.State.RUNNING);
         fireChanged();
+        saveQueue();
         try {
             if (job.kind() == TransferJob.Kind.DIRECTORY) {
                 runDirectory(job);
@@ -254,6 +373,7 @@ public final class TransferEngine {
         } finally {
             controls.remove(job.id());
             fireChanged();
+            saveQueue();
         }
     }
 

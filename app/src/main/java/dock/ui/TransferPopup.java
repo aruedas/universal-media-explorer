@@ -179,12 +179,15 @@ public final class TransferPopup {
     /**
      * The rows a popup shows: active jobs, failures (they stick around
      * until cleared — an error shouldn't silently scroll away), and jobs
-     * that settled within {@link #ROW_LINGER_MS}.
+     * that settled within {@link #ROW_LINGER_MS}. A waiting row restored from
+     * disk shows too: it is the reason the queue survived the close, so
+     * hiding it would leave no sign of the work still pending.
      */
     public static List<TransferJob> shownJobs(List<TransferJob> snapshot, long nowMillis) {
         List<TransferJob> out = new ArrayList<>();
         for (TransferJob j : snapshot) {
             if (j.isActive() || j.state() == TransferJob.State.FAILED
+                    || j.state() == TransferJob.State.WAITING
                     || (j.isFinished() && nowMillis - j.finishedAtMillis() <= ROW_LINGER_MS)) {
                 out.add(j);
             }
@@ -239,6 +242,12 @@ public final class TransferPopup {
                 nums = nums.isEmpty() ? p.percent() + "%" : nums + " · " + p.percent() + "%";
             }
             if (!nums.isEmpty()) nums = "· " + nums;
+        } else if (p.waiting() > 0) {
+            // Restored work that a session has to be opened before it moves —
+            // the queue outlived the app, not the transfer.
+            text = p.waiting() + " waiting for a session"
+                    + (failed > 0 ? " · " + failed + (failed == 1 ? " failure" : " failures") : "");
+            nums = "";
         } else if (failed > 0) {
             text = failed + (failed == 1 ? " failure" : " failures");
             nums = "";
@@ -373,7 +382,8 @@ public final class TransferPopup {
 
             boolean active = j.isActive();
             boolean failed = j.state() == TransferJob.State.FAILED;
-            action.setVisible(active || failed);
+            boolean waiting = j.state() == TransferJob.State.WAITING;
+            action.setVisible(active || failed || waiting);
             boolean retry = !active && failed;
             if (retry != actionIsRetry) {
                 actionIsRetry = retry;
@@ -397,6 +407,7 @@ public final class TransferPopup {
             case DONE -> j.kind() == TransferJob.Kind.DIRECTORY ? "Scanned"
                     : "Done — " + Fmt.bytes(Math.max(size, done));
             case FAILED -> "Failed — " + firstLine(j.error());
+            case WAITING -> "Waiting for session " + j.waitingOn();
             case CANCELLED -> "Cancelled";
             case SKIPPED -> "Skipped";
         };
@@ -578,6 +589,8 @@ public final class TransferPopup {
     public int rowCountForTest() { return onEdt(rowList::size); }
     /** The footer's number segment (tests): speed/percent text. */
     public String footerNumsTextForTest() { return onEdt(summaryNums::fullText); }
+    /** The footer's words (tests): what the queue is doing in one line. */
+    public String footerTextForTest() { return onEdt(summary::fullText); }
     /** The footer's number segment font (tests) — mono. */
     public java.awt.Font footerNumsFontForTest() { return onEdt(summaryNums::getFont); }
     /** The row's full file name (the model value, never ellipsized). */

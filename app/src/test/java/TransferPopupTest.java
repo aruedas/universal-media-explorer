@@ -219,6 +219,53 @@ class TransferPopupTest {
         assertTrue(shown.length() < longName.length());
     }
 
+    @Test
+    void aRestoredRowWaitsInThePopupUntilItsSessionOpens() throws Exception {
+        // The user's case: an upload to a saved site was still in the queue
+        // when the app closed. It comes back as a named waiting row, and the
+        // moment that site connects it moves — with no re-queueing by hand.
+        Path tmp = Files.createTempDirectory("dock-popup-waiting");
+        Path server = Files.createDirectories(tmp.resolve("server"));
+        Path src = Files.writeString(tmp.resolve("movie.mkv"), "container-bytes");
+        Path queueFile = tmp.resolve("queue.json");
+        Files.writeString(queueFile, ("""
+                {"version":1,"savedAt":1,"jobs":[{
+                  "id":"6f1c2c0e-0a4b-4a5c-8b0f-1d2e3f4a5b6c",
+                  "batchId":"6f1c2c0e-0a4b-4a5c-8b0f-1d2e3f4a5b6d","kind":"FILE",
+                  "srcSession":"local","srcPath":"%s",
+                  "dstSession":"srv-upload","dstPath":"%s",
+                  "move":false,"state":"QUEUED","size":15,"transferred":0,
+                  "error":null,"resumeFrom":0}]}
+                """).formatted(json(src.toString()), json(server.resolve("movie.mkv").toString())));
+        new dock.core.transfer.QueuePersistence(queueFile)
+                .restoreInto(engine, LocalFs.INSTANCE, site -> null);
+
+        popup.toggleForTest();
+        popup.refreshForTest();
+        assertEquals(1, popup.rowCountForTest());
+        assertEquals("movie.mkv", popup.rowNameForTest(0));
+        assertEquals("Waiting for session srv-upload", popup.rowDetailForTest(0));
+        assertEquals("1 waiting for a session", popup.footerTextForTest());
+
+        // Waiting rows outlive the linger window: they are unfinished work,
+        // not a finished burst scrolling away.
+        assertEquals(1, TransferPopup.shownJobs(engine.snapshot(),
+                System.currentTimeMillis() + 600_000).size());
+
+        engine.sessionOpened("srv-upload", LocalFs.INSTANCE);
+        await(() -> engine.snapshot().stream().noneMatch(TransferJob::isActive));
+        popup.refreshForTest();
+
+        assertEquals("container-bytes", Files.readString(server.resolve("movie.mkv")),
+                "opening the session ran the row it was holding");
+        assertTrue(popup.rowDetailForTest(0).startsWith("Done — "), popup.rowDetailForTest(0));
+    }
+
+    /** A path as JSON wants it: Windows separators escaped. */
+    private static String json(String path) {
+        return path.replace("\\", "\\\\");
+    }
+
     // ---- harness ----
 
     /** Posts a real Esc into the event queue; the popup's global listener sees it. */

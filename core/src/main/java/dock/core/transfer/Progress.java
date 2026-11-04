@@ -7,7 +7,10 @@ package dock.core.transfer;
  */
 public record Progress(boolean active, boolean recent, int running, int queued,
                        long speedBytesPerSec, long doneBytes, long totalBytes,
-                       int downloads, int uploads) {
+                       int downloads, int uploads,
+                       /** Rows restored from disk whose session is not open: no
+                        *  bytes move, but the queue is not empty either. */
+                       int waiting) {
 
     /**
      * Whether the burst's byte total is known. A burst of directory scans
