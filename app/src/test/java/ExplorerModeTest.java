@@ -68,7 +68,10 @@ class ExplorerModeTest {
                     // of the window but alive (still parented inside the split).
                     EventQueue.invokeAndWait(item::doClick);
                     assertTrue(view.localPaneHidden());
-                    await(() -> remote.getWidth() > 1100, "remote fills the window");
+                    // Fills the space the panes share, whatever the sidebar
+                    // and toolbars took from the window first.
+                    await(() -> remote.getWidth() >= view.getWidth() - 8,
+                            "remote fills the window");
                     assertFalse(SwingUtilities.isDescendingFrom(local, w.get()),
                             "local pane detached from the window");
                     assertTrue(local.getParent() != null, "local pane still alive");
@@ -90,7 +93,8 @@ class ExplorerModeTest {
                     JButton leftPane = footer.localPaneButtonForTest();
                     EventQueue.invokeAndWait(rightPane::doClick);
                     assertTrue(view.remotePaneHidden());
-                    await(() -> local.getWidth() > 1100, "local fills the window");
+                    await(() -> local.getWidth() >= view.getWidth() - 8,
+                            "local fills the window");
                     assertFalse(SwingUtilities.isDescendingFrom(remote, w.get()),
                             "remote pane detached from the window");
                     assertFalse(leftPane.isEnabled(), "the last visible pane cannot fold");

@@ -440,7 +440,7 @@ public final class Screens {
     /** The markdown the reader variant opens remotely — every construct the
      *  renderer pins, over the demo SFTP server. */
     private static final String MD_DOC = """
-            # Universal Explorer markdown shot
+            # Universal Media Explorer markdown shot
 
             A rendered paragraph with **bold**, *italics*, ~~gone~~ and `inline code`,
             plus a [link](https://universal-explorer.dev) that reads as one.
@@ -469,7 +469,7 @@ public final class Screens {
     private static final String LICENSE_DOC = """
             MIT License
 
-            Copyright (c) 2026 Universal Explorer contributors
+            Copyright (c) 2026 Universal Media Explorer contributors
 
             Permission is hereby granted, free of charge, to any person
             obtaining a copy of this software.
@@ -695,7 +695,7 @@ public final class Screens {
                             text.contains("rendered paragraph") && !text.contains("```"),
                             "prose present, fences gone: " + text.length() + " chars");
                     var heading = doc.getCharacterElement(
-                            text.indexOf("Universal Explorer markdown shot"))
+                            text.indexOf("Universal Media Explorer markdown shot"))
                             .getAttributes();
                     var body = doc.getCharacterElement(text.indexOf("rendered paragraph"))
                             .getAttributes();
@@ -809,7 +809,7 @@ public final class Screens {
                         }
                         add("md-repo-doc-opens", license != null
                                         && license.showingRender()
-                                        && body.contains("Universal Explorer contributors"),
+                                        && body.contains("Universal Media Explorer contributors"),
                                 "extensionless LICENSE opens on the rendered page");
                         view.fireEditorKeyForTest(remote, "ESCAPE");
                         Timer back = new Timer(400, e4 -> {
@@ -1427,10 +1427,9 @@ public final class Screens {
         // Terminal theming: the terminal area must render predominantly in the
         // current theme's background, not the other theme's.
         if (terminalShot && terminalRect != null) {
-            Color want = new Color(ThemeManager.mode() == ThemeManager.Mode.DARK
-                    ? 0x26292F : 0xFFFFFF);
-            Color other = new Color(ThemeManager.mode() == ThemeManager.Mode.DARK
-                    ? 0xFFFFFF : 0x26292F);
+            boolean dark = ThemeManager.mode() != ThemeManager.Mode.LIGHT;
+            Color want = new Color(dark ? 0x26292F : 0xFFFFFF);
+            Color other = new Color(dark ? 0xFFFFFF : 0x26292F);
             int wantHits = 0;
             int otherHits = 0;
             for (int y = terminalRect.y; y < terminalRect.y + terminalRect.height; y += 3) {

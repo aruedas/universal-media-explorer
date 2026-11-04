@@ -384,7 +384,7 @@ class SessionsHomeTest {
         Site touched = s.withLastUsed(123);
         assertEquals(123, touched.lastUsed());
         assertEquals(0, touched.withLastUsed(-5).lastUsed(), "negative normalizes to never");
-        assertEquals("Universal Explorer/u@h", touched.secretTarget());
+        assertEquals("Universal Media Explorer/u@h", touched.secretTarget());
     }
 
     @Test

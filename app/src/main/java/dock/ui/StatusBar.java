@@ -145,12 +145,23 @@ public final class StatusBar extends JPanel {
                 System.currentTimeMillis(), LINGER_MS);
 
         boolean active = p.active();
-        activity.setVisible(active);
+        // Restored rows whose session is closed are not moving, but they are
+        // not gone either: the footer says the queue is holding work so the
+        // user knows to open that session — or drop the rows.
+        boolean waiting = !active && p.waiting() > 0;
+        activity.setVisible(active || waiting);
         long bps = p.speedBytesPerSec();
         activitySpeed.setVisible(active && bps > 0);
         if (active) {
             activity.setText("↑↓ " + p.running() + (p.queued() > 0 ? " (+" + p.queued() + ")" : ""));
             if (bps > 0) activitySpeed.setText("· " + Fmt.speed(bps));
+        } else if (waiting) {
+            activity.setText("↑↓ " + p.waiting() + " waiting");
+            activity.setToolTipText(p.waiting()
+                    + " transfer" + (p.waiting() == 1 ? "" : "s")
+                    + " waiting for a session · Show transfers (Ctrl+Alt+Q)");
+        } else {
+            activity.setToolTipText("Show transfers (Ctrl+Alt+Q)");
         }
 
         // An indeterminate burst (directory scans only) has nothing worth
@@ -200,6 +211,9 @@ public final class StatusBar extends JPanel {
     public java.awt.Font hoverFontForTest() { return onEdt(hoverInfo::getFont); }
     /** The burst speed segment (tests): its text and its mono font. */
     public String activitySpeedTextForTest() { return onEdt(activitySpeed::getText); }
+    /** The transfer count segment (tests): what the queue is doing. */
+    public String activityTextForTest() { return onEdt(activity::getText); }
+    public boolean activityVisibleForTest() { return onEdt(activity::isVisible); }
     public java.awt.Font activitySpeedFontForTest() { return onEdt(activitySpeed::getFont); }
 
     @Override public void removeNotify() {
@@ -249,11 +263,11 @@ public final class StatusBar extends JPanel {
         localPaneButton.setIcon(Glyphs.icon(Glyphs.COLUMNS, Tokens.ICON_SMALL,
                 localHidden ? accent() : StatusBar::muted));
         localPaneButton.setToolTipText(
-                localHidden ? "Show the local pane" : "Hide the local pane");
+                localHidden ? "Show the left pane" : "Hide the left pane");
         remotePaneButton.setIcon(Glyphs.icon(Glyphs.COLUMNS, Tokens.ICON_SMALL,
                 remoteHidden ? accent() : StatusBar::muted));
         remotePaneButton.setToolTipText(
-                remoteHidden ? "Show the remote pane" : "Hide the remote pane");
+                remoteHidden ? "Show the right pane" : "Hide the right pane");
     }
 
     /** One of the footer's edge buttons: the columns glyph, muted while
@@ -278,22 +292,24 @@ public final class StatusBar extends JPanel {
     }
 
     private JButton themeButton() {
-        JButton b = new JButton(Glyphs.icon(
-                ThemeManager.mode() == ThemeManager.Mode.DARK ? Glyphs.SUN : Glyphs.MOON,
-                Tokens.ICON_SMALL, () -> muted()));
-        b.setToolTipText(ThemeManager.mode() == ThemeManager.Mode.DARK
-                ? "Switch to light theme" : "Switch to dark theme");
+        JButton b = new JButton(Glyphs.icon(themeGlyph(), Tokens.ICON_SMALL, () -> muted()));
+        b.setToolTipText("Theme: " + ThemeManager.modeLabel() + "  (click to cycle)");
         b.putClientProperty("JButton.buttonType", "borderless");
         b.setRolloverEnabled(true);
-        b.addActionListener(e -> ThemeManager.toggle());
+        b.addActionListener(e -> ThemeManager.cycleNext());
         ThemeManager.addListener(() -> {
-            b.setIcon(Glyphs.icon(
-                    ThemeManager.mode() == ThemeManager.Mode.DARK ? Glyphs.SUN : Glyphs.MOON,
-                    Tokens.ICON_SMALL, () -> muted()));
-            b.setToolTipText(ThemeManager.mode() == ThemeManager.Mode.DARK
-                    ? "Switch to light theme" : "Switch to dark theme");
+            b.setIcon(Glyphs.icon(themeGlyph(), Tokens.ICON_SMALL, () -> muted()));
+            b.setToolTipText("Theme: " + ThemeManager.modeLabel() + "  (click to cycle)");
         });
         return b;
+    }
+
+    private static String themeGlyph() {
+        return switch (ThemeManager.mode()) {
+            case LIGHT -> Glyphs.MOON;
+            case DARK  -> Glyphs.EYE;
+            case BLACK -> Glyphs.SUN;
+        };
     }
 
     private javax.swing.JSeparator verticalSeparator() {

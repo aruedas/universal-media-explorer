@@ -74,6 +74,32 @@ class StatusBarProgressTest {
         assertFalse(bar.progressVisibleForTest(), "the bar retires once the linger expires");
     }
 
+    @Test
+    void aWaitingRowKeepsTheFooterTalking() throws Exception {
+        // No bytes move, but the queue outlived the app: the footer has to
+        // say so, or a restored upload looks like it was thrown away.
+        Path tmp = Files.createTempDirectory("dock-footer-waiting");
+        Path queue = tmp.resolve("queue.json");
+        Files.writeString(queue, """
+                {"version":1,"savedAt":1,"jobs":[{
+                  "id":"6f1c2c0e-0a4b-4a5c-8b0f-1d2e3f4a5b6c",
+                  "batchId":"6f1c2c0e-0a4b-4a5c-8b0f-1d2e3f4a5b6d","kind":"FILE",
+                  "srcSession":"local","srcPath":"C:\\\\media\\\\one.mkv",
+                  "dstSession":"srv-upload","dstPath":"/upload/one.mkv",
+                  "move":false,"state":"QUEUED","size":10,"transferred":0,
+                  "error":null,"resumeFrom":0}]}
+                """);
+        TransferEngine engine = new TransferEngine();
+        new dock.core.transfer.QueuePersistence(queue)
+                .restoreInto(engine, LocalFs.INSTANCE, site -> null);
+        StatusBar bar = new StatusBar(engine, () -> {});
+
+        bar.pollForTest();
+        assertTrue(bar.activityVisibleForTest(), "the queue is not empty, so the footer says it");
+        assertEquals("↑↓ 1 waiting", bar.activityTextForTest());
+        assertFalse(bar.progressVisibleForTest(), "nothing is moving: no bar");
+    }
+
     private static void await(java.util.function.BooleanSupplier condition) {
         long deadline = System.currentTimeMillis() + 15_000;
         while (!condition.getAsBoolean()) {

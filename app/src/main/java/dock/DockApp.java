@@ -8,7 +8,7 @@ import javax.swing.JDialog;
 import javax.swing.JFrame;
 import javax.swing.SwingUtilities;
 
-/** Universal Explorer — a fast multi-protocol file client. */
+/** Universal Media Explorer — a fast multi-protocol media file client. */
 public final class DockApp {
 
     private DockApp() {}
@@ -60,6 +60,16 @@ public final class DockApp {
         }
         if (java.util.Arrays.asList(args).contains("--selftest-queue")) {
             SelftestQueue.run();
+            return;
+        }
+        if (java.util.Arrays.asList(args).contains("--import-favorites")) {
+            // Headless migration: the same read the Favorites menu runs, for
+            // setting up a new machine (or a new build) from a script.
+            java.util.List<String> shelf = dock.core.config.Favorites.load();
+            var result = dock.core.config.SimpleCommanderImport.importInto(shelf);
+            if (result.added() > 0) dock.core.config.Favorites.save(shelf);
+            System.out.println(result.summary());
+            shelf.forEach(p -> System.out.println("  " + p));
             return;
         }
         if (java.util.Arrays.asList(args).contains("--demo")) {

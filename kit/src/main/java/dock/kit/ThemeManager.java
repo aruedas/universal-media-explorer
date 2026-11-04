@@ -14,15 +14,17 @@ import javax.swing.UIManager;
  * Applies the FlatLaf theme. Follows the Windows dark-mode setting by
  * default; an explicit in-app switch disables following until re-enabled.
  *
+ * Three modes: Light, Dark, and Black (SimpleCommander-style AMOLED).
+ *
  * System theme changes are picked up by a low-frequency registry poll (2s).
  * The alternative — intercepting WM_SETTINGCHANGE via a native window
  * subclass — costs fragile JNA code for a two-second latency win.
  */
 public final class ThemeManager {
 
-    public enum Mode { DARK, LIGHT }
+    public enum Mode { LIGHT, DARK, BLACK }
 
-    private static volatile Mode mode = Mode.DARK;
+    private static volatile Mode mode = Mode.BLACK;
     private static volatile boolean followSystem = true;
     private static final List<Runnable> listeners = new CopyOnWriteArrayList<>();
 
@@ -30,17 +32,17 @@ public final class ThemeManager {
 
     public static void init() {
         FlatLaf.registerCustomDefaultsSource("dock.themes");
-        mode = systemPrefersDark() ? Mode.DARK : Mode.LIGHT;
+        mode = systemPrefersDark() ? Mode.BLACK : Mode.LIGHT;
         apply();
         Thread.ofVirtual().name("theme-watcher").start(() -> {
-            boolean lastDark = mode == Mode.DARK;
+            boolean lastDark = mode != Mode.LIGHT;
             while (true) {
                 try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
                 if (!followSystem) continue;
                 boolean dark = systemPrefersDark();
                 if (dark != lastDark) {
                     lastDark = dark;
-                    Mode next = dark ? Mode.DARK : Mode.LIGHT;
+                    Mode next = dark ? Mode.BLACK : Mode.LIGHT;
                     SwingUtilities.invokeLater(() -> {
                         mode = next;
                         apply();
@@ -57,14 +59,19 @@ public final class ThemeManager {
         apply();
     }
 
-    public static void toggle() {
-        setMode(mode == Mode.DARK ? Mode.LIGHT : Mode.DARK);
+    /** Cycles Light → Dark → Black → Light. */
+    public static void cycleNext() {
+        setMode(switch (mode) {
+            case LIGHT -> Mode.DARK;
+            case DARK  -> Mode.BLACK;
+            case BLACK -> Mode.LIGHT;
+        });
     }
 
     public static void setFollowSystem(boolean follow) {
         followSystem = follow;
         if (follow) {
-            mode = systemPrefersDark() ? Mode.DARK : Mode.LIGHT;
+            mode = systemPrefersDark() ? Mode.BLACK : Mode.LIGHT;
             apply();
         }
     }
@@ -72,11 +79,24 @@ public final class ThemeManager {
     public static boolean isFollowSystem() { return followSystem; }
     public static Mode mode() { return mode; }
 
+    /** Human-readable label for menus. */
+    public static String modeLabel() {
+        return switch (mode) {
+            case LIGHT -> "Light";
+            case DARK  -> "Dark";
+            case BLACK -> "Black";
+        };
+    }
+
     /** Notified (on the EDT) after every theme application. */
     public static void addListener(Runnable l) { listeners.add(l); }
 
     private static void apply() {
-        FlatLaf laf = mode == Mode.DARK ? new FlatDarkLaf() : new FlatLightLaf();
+        FlatLaf laf = switch (mode) {
+            case LIGHT -> new FlatLightLaf();
+            case DARK  -> new FlatDarkLaf();
+            case BLACK -> new FlatBlackLaf();
+        };
         FlatLaf.setup(laf);
         // Icons can't be expressed in theme properties; re-register after every
         // LAF setup (which resets UIDefaults). Small IntelliJ-style close mark.
