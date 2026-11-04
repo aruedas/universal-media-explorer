@@ -1,10 +1,10 @@
 <div align="center">
 
-# Universal Explorer
+# Universal Media Explorer
 
-<img src="docs/icon.png" width="128" alt="Universal Explorer planet icon" />
+<img src="docs/icon.png" width="128" alt="Universal Media Explorer planet icon" />
 
-A fast, keyboard-first multi-protocol file client for Windows.
+A fast, keyboard-first multi-protocol media file client for Windows.
 
 SFTP · SMB · WebDAV · FTP · S3 — one dual-pane shell with a built-in
 terminal, viewer, and editor.
@@ -34,7 +34,7 @@ spreading to other desktops is part of the point.
 - **Background transfer queue** — copies and moves keep running while you browse.
 - **Built-in surfaces**: an embedded terminal (JediTerm), an image viewer, a text editor with syntax highlighting, a markdown reader, streaming media playback, and archive browsing.
 - **Dark and light themes** that follow Windows, FlatLaf-based, with bundled Inter, JetBrains Mono, and Nerd Font glyphs.
-- **Secrets stay secrets**: passwords and key passphrases live in the Windows Credential Manager, never in files. Sessions and remembered paths are plain JSON under `%APPDATA%\Universal Explorer`.
+- **Secrets stay secrets**: passwords and key passphrases live in the Windows Credential Manager, never in files. Sessions and remembered paths are plain JSON under `%APPDATA%\Universal Media Explorer`.
 - **Keyboard-first throughout** — `F5`/`F6` copy/move, arrow-key hopping between panes, type-to-select everywhere.
 
 ## Screenshots
@@ -53,7 +53,7 @@ spreading to other desktops is part of the point.
 
 ## Build and run
 
-Universal Explorer is Windows-first and needs a **JDK 25**.
+Universal Media Explorer is Windows-first and needs a **JDK 25**.
 
 ```
 gradlew.bat :app:run
@@ -90,11 +90,35 @@ refused by Windows Installer — uninstall first or bump the version.
 
 ## Where your data lives
 
-- Sessions and remembered paths: `%APPDATA%\Universal Explorer\sessions.json`
+- Sessions and remembered paths: `%APPDATA%\Universal Media Explorer\sessions.json`
 - Passwords and key passphrases: Windows Credential Manager, under
-  `Universal Explorer/<site>` — plaintext secrets are never written to disk.
+  `Universal Media Explorer/<site>` — plaintext secrets are never written to disk.
 - Nothing phones home. There is no telemetry, no update checker, no
   account.
+
+## Media toolkit scripts (optional)
+
+The commander toolbar's NOMBRAR / CERTIFICAR / UPLOAD buttons, the file
+pane's "Toolkit Actions" submenu and the media-server sidebar all drive an
+external PowerShell toolkit: a folder of `.ps1` scripts plus the
+`m3u_server_methods.ini` file that describes the media servers. The app is a
+launcher for them, not their owner — none of it is required to browse,
+transfer or play.
+
+The folder is found in this order, first match wins, and it is re-read on
+every click, so you do not need to restart after moving the toolkit:
+
+1. the `UME_TOOLKIT_PATH` environment variable;
+2. `"toolkitRoot": "D:/media/toolkit"` in
+   `%APPDATA%\Universal Media Explorer\settings.json`;
+3. `C:\Scripts`, on Windows, if that directory exists — the location the
+   toolkit has historically used.
+
+With none of the three present the app still starts and every file operation
+works. The file menu greys each toolkit item and its tooltip names the script
+it looked for and where it looked; a toolbar button that is clicked anyway
+answers with the same sentence instead of a stack trace, and no PowerShell is
+started.
 
 ## How this project is made
 
@@ -104,7 +128,7 @@ and reviewed every change — but I did not type the code myself. It was
 written by an AI assistant working under my direction, one small
 reviewed slice at a time, each slice gated by tests before it landed.
 
-Universal Explorer is a personal tool, built for my own needs and
+Universal Media Explorer is a personal tool, built for my own needs and
 shared in case it is useful to anyone else. There is no company, no
 product, no roadmap and no obligation behind it. If it serves you —
 use it, fork it, have fun with it.
@@ -123,7 +147,7 @@ See also [CONTRIBUTING.md](CONTRIBUTING.md) and
 
 ## License
 
-Copyright (c) 2026 Universal Explorer contributors.
+Copyright (c) 2026 Universal Media Explorer contributors.
 
 Licensed under the [GNU GPL v3](LICENSE) (or, at your option, any
 later version). One reason it has to be GPL: media playback rides on
