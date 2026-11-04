@@ -12,9 +12,14 @@ dependencies {
     implementation(project(":editor"))
     // Enter/F3 on media swaps the pane for the streaming player.
     implementation(project(":media"))
+    // Toolkit actions (Certificar, FixFiles, UPLOAD) launch through the terminal module.
+    implementation(project(":terminal"))
 
     // The local drive list reads known-folder GUIDs from the registry.
     implementation(libs.jna.platform)
+
+    // The media-intelligence columns parse the PS engine's probe cache.
+    implementation(libs.jackson.databind)
 
     // Explorer/hidden-files tests browse a live in-process SFTP server.
     testImplementation(project(":sftp"))

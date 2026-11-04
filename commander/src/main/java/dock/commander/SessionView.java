@@ -12,9 +12,6 @@ import dock.core.fs.FileSystem;
 import dock.core.fs.LocalFs;
 import dock.core.transfer.TransferEngine;
 import dock.core.transfer.TransferJob;
-import dock.viewer.ImageViewerPanel;
-import dock.editor.EditorPanel;
-import dock.media.PlayerPanel;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.event.FocusAdapter;
@@ -60,20 +57,13 @@ public final class SessionView extends javax.swing.JPanel
     /** The divider's last standing position, restored when both sides
      *  return after an excursion. */
     private int lastDivider = -1;
-    /** The image viewer currently replacing a pane, if any — the pane it
-     *  covers stays alive underneath: its directory, stacks, and transfers
-     *  (F5/F6 act on the last active pane) keep working while hidden. */
-    private ImageViewerPanel viewerLocal;
-    private ImageViewerPanel viewerRemote;
-    /** The text editor currently replacing a pane, if any — the same
-     *  excursion again, one stand-in per side. */
-    private EditorPanel editorLocal;
-    private EditorPanel editorRemote;
-    /** The media player currently replacing a pane, if any — one more
-     *  stand-in in the family. It holds live resources (an engine, a
+    /** The surfaces that cover a pane — image viewer, text editor, media
+     *  player — with the slot bookkeeping they share. One stand-in per
+     *  side; the pane it covers stays alive underneath, so its directory,
+     *  stacks and transfers (F5/F6 act on the last active pane) keep
+     *  working while hidden. The player holds live resources (an engine, a
      *  bridge token), so retiring it always runs through its release. */
-    private PlayerPanel playerLocal;
-    private PlayerPanel playerRemote;
+    private final PaneStandins standins;
     /** The saved session this view belongs to, once applied — the panes
      *  reopen at the directories it remembers and navigation records back
      *  under it. Ad-hoc sessions stay null: nothing to key memory on. */
@@ -118,19 +108,6 @@ public final class SessionView extends javax.swing.JPanel
         // first arrow-down starts the scan. A background tab's focus
         // request quietly fails.
         remote.onFirstListing(remote::focusTable);
-        // Enter or F3 on an image replaces that pane with the viewer.
-        local.onViewRequest(name -> openViewer(local, name));
-        remote.onViewRequest(name -> openViewer(remote, name));
-        // Enter or F3 on a markdown file replaces that pane with the editor
-        // opened on its rendered page — one surface, flipped to source.
-        local.onMarkdownRequest(name -> openEditor(local, name, true));
-        remote.onMarkdownRequest(name -> openEditor(remote, name, true));
-        // F4 on a file replaces that pane with the text editor.
-        local.onEditRequest(name -> openEditor(local, name));
-        remote.onEditRequest(name -> openEditor(remote, name));
-        // Enter or F3 on media replaces that pane with the streaming player.
-        local.onPlayRequest(name -> openPlayer(local, name));
-        remote.onPlayRequest(name -> openPlayer(remote, name));
         // Path memory: every committed listing tells the session where its
         // panes stand; applySite supplies the key and the restores.
         local.onDirLanded(this::paneLanded);
@@ -164,6 +141,14 @@ public final class SessionView extends javax.swing.JPanel
         content.add(split, BorderLayout.CENTER);
         add(banner, BorderLayout.NORTH);
         add(content, BorderLayout.CENTER);
+
+        // The stand-ins need the finished split and content panel: a side
+        // either swaps within the split or covers the whole window, which
+        // the hidden flags decide.
+        this.standins = new PaneStandins(local, remote, content, split,
+                this::sideHidden, () -> siteName);
+        standins.install(local);
+        standins.install(remote);
 
         // The session keeps its loss hook alive across reconnects; it may
         // fire for our own close too — the closing flag filters that.
@@ -201,166 +186,41 @@ public final class SessionView extends javax.swing.JPanel
                 (c.getBlue() + bg.getBlue()) / 2);
     }
 
-    // ---- pane stand-ins (image viewer, markdown reader) ----
-
-    /** Swaps {@code side} out for the in-pane image viewer on one file. */
-    private void openViewer(FilePane side, String firstName) {
-        // A folded side is off-screen; nothing can open a viewer on it.
-        if (sideHidden(side)) return;
-        closeViewer(side);       // one stand-in per side, whichever kind
-        closeEditor(side);
-        ImageViewerPanel viewer = new ImageViewerPanel(side.fs(), side.path(), firstName,
-                side::imageSequence, side::selectEntry, () -> closeViewer(side));
-        if (side == local) viewerLocal = viewer; else viewerRemote = viewer;
-        mountStandin(side, viewer);
-        viewer.focusCanvas();
-    }
-
-    /** Puts the file table back and hands it the keyboard. */
-    private void closeViewer(FilePane side) {
-        ImageViewerPanel viewer = side == local ? viewerLocal : viewerRemote;
-        if (viewer == null) return;
-        if (side == local) viewerLocal = null; else viewerRemote = null;
-        mountStandin(side, side);
-        side.focusTable();
-    }
-
-    /** Swaps {@code side} out for the text editor on one file. Saves land
-     *  back through the same pane's filesystem and refresh its listing —
-     *  a remote edit uploads on every save. Markdown files open on the
-     *  rendered page ({@code render} true, the open path) or straight on
-     *  the source (false, F4) and flip between the two in place. */
-    private void openEditor(FilePane side, String name) {
-        openEditor(side, name, false);
-    }
-
-    private void openEditor(FilePane side, String name, boolean render) {
-        if (sideHidden(side)) return;
-        closeEditor(side);
-        closeViewer(side);
-        EditorPanel editor = new EditorPanel(side.fs(), side.path(), name, render,
-                linked -> openEditor(side, linked, true),
-                side::reload, () -> closeEditor(side));
-        // The reader's convention rides the render open: the pane's cursor
-        // follows the file shown. The edit path (F4) keeps the editor's
-        // own rule — the cursor stands where F4 found it.
-        if (render) editor.onNavigate(side::selectEntry);
-        if (side == local) editorLocal = editor; else editorRemote = editor;
-        mountStandin(side, editor);
-        editor.focusCanvas();
-    }
-
-    /** Puts the file table back and hands it the keyboard. */
-    private void closeEditor(FilePane side) {
-        EditorPanel editor = side == local ? editorLocal : editorRemote;
-        if (editor == null) return;
-        if (side == local) editorLocal = null; else editorRemote = null;
-        mountStandin(side, side);
-        side.focusTable();
-    }
-
-    /** Swaps {@code side} out for the in-pane streaming player on one file. */
-    private void openPlayer(FilePane side, String name) {
-        if (sideHidden(side)) return;
-        closePlayer(side);        // one stand-in per side, whichever kind
-        closeViewer(side);
-        closeEditor(side);
-        PlayerPanel player = new PlayerPanel(side.fs(), side.path(), name,
-                side::mediaSequence, side::selectEntry, () -> closePlayer(side),
-                new SessionPlayback(siteName));
-        if (side == local) playerLocal = player; else playerRemote = player;
-        mountStandin(side, player);
-        player.focusSurface();
-    }
-
-    /** Puts the file table back and hands it the keyboard. The player's
-     *  engine and bridge token are retired before the unmount. */
-    private void closePlayer(FilePane side) {
-        PlayerPanel player = side == local ? playerLocal : playerRemote;
-        if (player == null) return;
-        if (side == local) playerLocal = null; else playerRemote = null;
-        player.release();
-        mountStandin(side, side);
-        side.focusTable();
-    }
-
-    /** Seats a stand-in (or the pane itself back again) in {@code side}'s
-     *  slot: the commander split for one side, or the whole window while
-     *  the other side is folded away. A folded side's slot is off-screen,
-     *  so its swaps are bookkeeping — the display stands untouched. */
-    private void mountStandin(FilePane side, java.awt.Component standin) {
-        if (sideHidden(side)) return;
-        if (localHidden || remoteHidden) {
-            content.removeAll();
-            content.add(standin, BorderLayout.CENTER);
-        } else {
-            swapSplitSide(side, standin);
-        }
-        content.revalidate();
-        content.repaint();
-    }
-
-    /**
-     * Replaces one side of the commander split, holding the separator at
-     * its exact position. A child swap arms the split layout's
-     * reset-to-preferred-sizes pass (BasicSplitPaneUI sets doReset on
-     * every add and remove), which would park the divider wherever the
-     * newcomer's preferred width ends. Re-asserting the location after
-     * the swap re-arms the "location is set" flag instead, so the
-     * pending layout puts the divider back where it was — the pane and
-     * its stand-in keep the same width, with no jump in either
-     * direction. A divider dragged while a viewer is open survives the
-     * close the same way.
-     */
-    private void swapSplitSide(FilePane side, java.awt.Component standing) {
-        int divider = split.getDividerLocation();
-        if (side == local) split.setLeftComponent(standing);
-        else split.setRightComponent(standing);
-        split.setDividerLocation(divider);
-    }
-
-    private void closeAllViewers() {
-        closeViewer(local);
-        closeViewer(remote);
-        closeEditor(local);
-        closeEditor(remote);
-        closePlayer(local);
-        closePlayer(remote);
-    }
+    // ---- pane stand-ins (image viewer, editor, player) ----
 
     /** True when the image viewer is currently standing in for this pane. */
     public boolean showingViewer(FilePane side) {
-        return (side == local ? viewerLocal : viewerRemote) != null;
+        return standins.showingViewer(side);
     }
 
     /** True when the text editor is currently standing in for this pane. */
     public boolean showingEditor(FilePane side) {
-        return (side == local ? editorLocal : editorRemote) != null;
+        return standins.showingEditor(side);
     }
 
     /** True when the media player is currently standing in for this pane. */
     public boolean showingPlayer(FilePane side) {
-        return (side == local ? playerLocal : playerRemote) != null;
+        return standins.showingPlayer(side);
     }
 
     /** Fires a key on the viewer covering {@code side} — the integration
      *  tests drive ESC/arrows through the real binding. */
     public void fireViewerKeyForTest(FilePane side, String spec) {
-        ImageViewerPanel viewer = side == local ? viewerLocal : viewerRemote;
+        var viewer = standins.viewerOf(side);
         if (viewer != null) viewer.fireKeyForTest(spec);
     }
 
     /** Fires a key on the editor covering {@code side} — the integration
      *  tests drive Ctrl+S/ESC through the real binding. */
     public void fireEditorKeyForTest(FilePane side, String spec) {
-        EditorPanel editor = side == local ? editorLocal : editorRemote;
+        var editor = standins.editorOf(side);
         if (editor != null) editor.fireKeyForTest(spec);
     }
 
     /** Fires a key on the player covering {@code side} — the integration
      *  tests drive Space/ESC through the real binding. */
     public void firePlayerKeyForTest(FilePane side, String spec) {
-        PlayerPanel player = side == local ? playerLocal : playerRemote;
+        var player = standins.playerOf(side);
         if (player != null) player.fireKeyForTest(spec);
     }
 
@@ -427,10 +287,11 @@ public final class SessionView extends javax.swing.JPanel
                     reconnectAttempt = 0;
                     // The stand-ins hold the dead connection's filesystem —
                     // they go before the pane switches to the fresh one.
-                    closeViewer(remote);
-                    closeEditor(remote);
-                    closePlayer(remote);
+                    standins.closeAll(remote);
                     remotePane().setFileSystem(fresh);
+                    // Queue rows that named the dead instance now run through
+                    // the healed one; failures keep their resume point.
+                    TransferEngine.GLOBAL.sessionRebound(dead, fresh);
                     Toast.show(SessionView.this, "Reconnected.", Glyphs.CHECK);
                 });
             } catch (Exception e) {
@@ -496,22 +357,20 @@ public final class SessionView extends javax.swing.JPanel
         return lastActive;
     }
 
+    /** Menu dispatch: the pane the Edit/Go menus act on. */
+    public FilePane activeFilePane() { return activePane(); }
+
     /** A LEFT/RIGHT hop moves the keyboard without selecting anything.
      *  A folded side is off-screen, so hops onto it do nothing. A side
      *  showing a stand-in takes the hop itself — the table underneath
      *  it is hidden. */
     private void hop(FilePane target) {
         if (sideHidden(target)) return;
-        ImageViewerPanel viewer = target == local ? viewerLocal : viewerRemote;
-        EditorPanel editor = target == local ? editorLocal : editorRemote;
-        PlayerPanel player = target == local ? playerLocal : playerRemote;
-        if (viewer != null) viewer.focusCanvas();
-        else if (editor != null) editor.focusCanvas();
-        else if (player != null) player.focusSurface();
-        else target.focusTable();
+        standins.focusOccupant(target);
     }
 
-    private void transfer(boolean move) {
+    /** F5/F6 and the Edit menu's copy/move-to-other-pane. */
+    public void transfer(boolean move) {
         FilePane from = activePane();
         FilePane to = from == local ? remote : local;
         List<FileEntry> selected = from.selectedEntries();
@@ -586,6 +445,12 @@ public final class SessionView extends javax.swing.JPanel
         remote.applyViewSettings();
     }
 
+    /** Pushes the View-menu preview switch into both panes. */
+    public void applyPreviewEnabled() {
+        local.applyPreviewEnabled();
+        remote.applyPreviewEnabled();
+    }
+
     // ---- pane visibility ----
 
     /** Whether {@code side} is folded away — off-screen, but alive with
@@ -596,16 +461,7 @@ public final class SessionView extends javax.swing.JPanel
 
     /** The side's current occupant: the stand-in covering it, or the pane. */
     private java.awt.Component slot(FilePane side) {
-        if (side == local) {
-            if (viewerLocal != null) return viewerLocal;
-            if (editorLocal != null) return editorLocal;
-            if (playerLocal != null) return playerLocal;
-        } else {
-            if (viewerRemote != null) return viewerRemote;
-            if (editorRemote != null) return editorRemote;
-            if (playerRemote != null) return playerRemote;
-        }
-        return side;
+        return standins.occupant(side);
     }
 
     /**
@@ -670,11 +526,20 @@ public final class SessionView extends javax.swing.JPanel
      */
     public void applySite(Site site) {
         siteName = site.name();
+        // The queue file writes remote endpoints as saved-site names, so this
+        // is where a connection becomes addressable: rows restored waiting
+        // on this site get the live channel and start moving.
+        TransferEngine.GLOBAL.sessionOpened(siteName, remoteFs);
+        // A saved site remembers in sessions.json; an unsaved quick connect
+        // falls back to the last_locations shelf, keyed by name either way.
+        var shelf = dock.core.config.LastLocations.session(siteName);
         String l = site.lastLocalPath();
+        String r = site.lastRemotePath();
+        if ((l == null || l.isBlank()) && shelf != null) l = shelf.local();
+        if ((r == null || r.isBlank()) && shelf != null) r = shelf.remote();
         if (l != null && !l.isBlank() && local.fs() == LocalFs.INSTANCE
                 && !l.equals(local.path()))
             local.navigatePlace(LocalFs.INSTANCE, l);
-        String r = site.lastRemotePath();
         if (r != null && !r.isBlank() && remote.fs() == remoteFs && !r.equals(remote.path()))
             remote.navigatePlace(remoteFs, r);
     }
@@ -699,6 +564,9 @@ public final class SessionView extends javax.swing.JPanel
             } catch (Exception ignored) {
                 // Best-effort memory; navigation must never fail over it.
             }
+            // Saved or not, the shelf keeps the pair so even an unsaved
+            // quick connect reopens where it left.
+            dock.core.config.LastLocations.putSession(site, l, r);
         });
     }
 
@@ -707,9 +575,7 @@ public final class SessionView extends javax.swing.JPanel
      *  retire stand-ins synchronously — there is no room for a
      *  save-then-close round trip there, so the choice is explicit. */
     private boolean confirmLosingEdits(String what) {
-        boolean dirty = (editorLocal != null && editorLocal.isDirty())
-                || (editorRemote != null && editorRemote.isDirty());
-        if (!dirty) return true;
+        if (!standins.hasUnsavedEdits()) return true;
         return JOptionPane.showConfirmDialog(this,
                 "There are unsaved edits. " + what + " Discard them?",
                 "Unsaved edits", JOptionPane.YES_NO_OPTION,
@@ -728,7 +594,7 @@ public final class SessionView extends javax.swing.JPanel
         }
         if (!confirmLosingEdits("Closing the session closes the editor.")) return;
         closing = true;
-        closeAllViewers();
+        standins.closeAll();
         local.releaseMounts();
         remote.releaseMounts();
         Thread.ofVirtual().start(session::close);

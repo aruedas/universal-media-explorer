@@ -22,6 +22,7 @@ import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -37,6 +38,7 @@ import javax.swing.BoxLayout;
 import javax.swing.DefaultCellEditor;
 import javax.swing.JButton;
 import javax.swing.JLabel;
+import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -96,8 +98,30 @@ public final class FilePane extends JPanel {
         }
 
         @Override protected void processKeyEvent(java.awt.event.KeyEvent e) {
+            // Plain Space previews the selection (SimpleCommander's flow) —
+            // before speed search sees it, or it would start a query. An
+            // active search keeps Space for its text. The KEY_TYPED space
+            // trails the swallowed press and dies here too.
+            if (!speed.active() && !table.isEditing() && plainSpace(e)) {
+                e.consume();
+                if (e.getID() == java.awt.event.KeyEvent.KEY_PRESSED) togglePreview();
+                return;
+            }
             if (speed.process(e)) return;
             super.processKeyEvent(e);
+        }
+
+        private boolean plainSpace(java.awt.event.KeyEvent e) {
+            if (e.getID() == java.awt.event.KeyEvent.KEY_PRESSED
+                    && e.getKeyCode() != java.awt.event.KeyEvent.VK_SPACE) return false;
+            if (e.getID() == java.awt.event.KeyEvent.KEY_TYPED && e.getKeyChar() != ' ') {
+                return false;
+            }
+            int mask = java.awt.event.KeyEvent.SHIFT_DOWN_MASK
+                    | java.awt.event.KeyEvent.CTRL_DOWN_MASK
+                    | java.awt.event.KeyEvent.ALT_DOWN_MASK
+                    | java.awt.event.KeyEvent.META_DOWN_MASK;
+            return previewEnabled() && (e.getModifiersEx() & mask) == 0;
         }
 
         void processKeyForTest(java.awt.event.KeyEvent e) {
@@ -139,6 +163,9 @@ public final class FilePane extends JPanel {
     private boolean everListed;
     private String path = "";
     private List<FileEntry> current = List.of();
+    /** Media intelligence for {@link #current}, keyed by entry name —
+     *  recomputed on each local listing, reused by re-sorts. */
+    private Map<String, MediaIntel.RowIntel> intel = Map.of();
     private long totalDirs, totalFiles;
     private FileTableModel.Column sortColumn = FileTableModel.Column.NAME;
     private boolean sortAscending = true;
@@ -184,7 +211,17 @@ public final class FilePane extends JPanel {
      *  filesystem entry until Enter commits it. */
     private FileEntry draftEntry;
     private DefaultCellEditor draftEditor;
+    private boolean draftIsFolder = true;
     private boolean autoConfirmDelete;
+    /** Hosts the list alone — or the list split with the space preview. */
+    private final JPanel body = new JPanel(new BorderLayout());
+    /** The space preview's content well, rebuilt per selection. */
+    private final JPanel previewBody = new JPanel(new BorderLayout());
+    private boolean previewOpen;
+    private long previewGen;
+    /** The entry the preview currently shows — re-selecting the same row
+     *  doesn't re-read the file. */
+    private String previewShownName;
 
     public FilePane(FileSystem fs) {
         this.fs = fs;
@@ -198,7 +235,8 @@ public final class FilePane extends JPanel {
         scroll.getViewport().addChangeListener(e -> speed.changed());
         setLayout(new BorderLayout());
         add(buildToolbar(), BorderLayout.NORTH);
-        add(listHost, BorderLayout.CENTER);
+        body.add(listHost, BorderLayout.CENTER);
+        add(body, BorderLayout.CENTER);
         add(buildSummary(), BorderLayout.SOUTH);
         configureTable();
         bindKeys();
@@ -246,6 +284,302 @@ public final class FilePane extends JPanel {
 
     /** Ctrl+L: switch this pane's path bar to manual editing. */
     public void beginPathEdit() { pathBar.beginEdit(); }
+
+    // ---- space preview (SimpleCommander's flow: Space toggles) ----
+
+    /** The View-menu switch, persisted in settings.json. */
+    private static volatile boolean previewOn =
+            dock.core.config.AppSettings.flag("previewEnabled", true);
+
+    public static boolean previewEnabled() { return previewOn; }
+
+    /** Tests flip the switch without touching settings.json. */
+    static void previewEnabledForTest(boolean on) { previewOn = on; }
+
+    /** Throws through to settings.json; the caller toasts the failure. */
+    public static void setPreviewEnabled(boolean on) throws java.io.IOException {
+        dock.core.config.AppSettings.setFlag("previewEnabled", on);
+        previewOn = on;
+    }
+
+    /** Pushes the View-menu switch into this pane: off closes an open
+     *  preview; on leaves it closed until Space opens it. */
+    public void applyPreviewEnabled() {
+        if (previewOpen && !previewOn) closePreview();
+    }
+
+    /** Tests. */
+    public boolean previewOpenForTest() { return previewOpen; }
+
+    private void togglePreview() {
+        if (previewOpen) closePreview(); else openPreview();
+    }
+
+    private void openPreview() {
+        if (previewOpen || draftEntry != null) return;
+        previewOpen = true;
+        previewShownName = null;
+        javax.swing.JSplitPane sp = new javax.swing.JSplitPane(
+                javax.swing.JSplitPane.HORIZONTAL_SPLIT, listHost, previewBody);
+        sp.setResizeWeight(1.0);
+        sp.setContinuousLayout(true);
+        sp.setBorder(BorderFactory.createEmptyBorder());
+        // Fixed-width well: the list keeps every extra pixel.
+        previewBody.setPreferredSize(new Dimension(340, 0));
+        body.removeAll();
+        body.add(sp, BorderLayout.CENTER);
+        body.revalidate();
+        body.repaint();
+        showPreviewForSelection();
+    }
+
+    private void closePreview() {
+        if (!previewOpen) return;
+        previewOpen = false;
+        previewGen++;
+        previewBody.removeAll();
+        body.removeAll();
+        body.add(listHost, BorderLayout.CENTER);
+        body.revalidate();
+        body.repaint();
+    }
+
+    /** Rebuilds the well for the current selection — one entry previews
+     *  its content, anything else explains itself. */
+    private void showPreviewForSelection() {
+        if (!previewOpen) return;
+        List<FileEntry> sel = selectedEntries();
+        if (sel.size() != 1 || sel.get(0) == FileEntry.PARENT) {
+            previewShownName = null;
+            previewGen++;
+            previewBody.removeAll();
+            previewBody.add(previewNote(sel.size() > 1
+                    ? "One item at a time — clear the multi-selection to preview."
+                    : "Select an item to preview."), BorderLayout.CENTER);
+            previewBody.revalidate();
+            previewBody.repaint();
+            return;
+        }
+        FileEntry e = sel.get(0);
+        if (e.name().equals(previewShownName) && previewBody.getComponentCount() > 0) return;
+        previewShownName = e.name();
+        long gen = ++previewGen;
+        previewBody.removeAll();
+        previewBody.add(previewNote("Reading…"), BorderLayout.CENTER);
+        previewBody.revalidate();
+        previewBody.repaint();
+        String dir = path;
+        MediaIntel.RowIntel rowIntel = intel.get(e.name());
+        Thread.ofVirtual().name("dock-preview").start(() -> {
+            javax.swing.JComponent content;
+            try {
+                content = buildPreviewContent(dir, e, rowIntel);
+            } catch (Exception ex) {
+                String msg = ex.getMessage();
+                content = previewNote("Preview failed: "
+                        + (msg == null ? ex.toString() : msg));
+            }
+            javax.swing.JComponent built = content;
+            SwingUtilities.invokeLater(() -> {
+                if (!previewOpen || previewGen != gen) return;
+                previewBody.removeAll();
+                previewBody.add(built, BorderLayout.CENTER);
+                previewBody.revalidate();
+                previewBody.repaint();
+            });
+        });
+    }
+
+    /** Reads the entry and builds the preview surface — off the EDT. */
+    private javax.swing.JComponent buildPreviewContent(
+            String dir, FileEntry e, MediaIntel.RowIntel rowIntel) throws java.io.IOException {
+        String full = fs.child(dir, e.name());
+        if (e.directory()) {
+            javax.swing.JComponent poster = null;
+            if (!fs.remote()) {
+                try {
+                    java.nio.file.Path p = MediaIntel.findPoster(java.nio.file.Path.of(full));
+                    if (p != null) poster = new ImageCanvas(
+                            java.nio.file.Files.readAllBytes(p));
+                } catch (Exception ignored) {
+                    // a folder without a readable poster previews as facts
+                }
+            }
+            return previewWithFacts(poster, e, rowIntel);
+        }
+        switch (extOf(e.name())) {
+            case "png", "jpg", "jpeg", "gif", "bmp", "webp" -> {
+                ImageCanvas canvas = new ImageCanvas(readCapped(full, 24 * 1024 * 1024));
+                return previewWithFacts(
+                        canvas.getIconWidth() > 0 ? canvas : null, e, rowIntel);
+            }
+            case "md" -> {
+                dock.markdown.MarkdownPage page = new dock.markdown.MarkdownPage(fs, dir);
+                page.render(e.name(), null);
+                return page;
+            }
+            default -> {
+                String ext = extOf(e.name());
+                if (TEXT_EXTS.contains(ext)) {
+                    byte[] bytes = readCapped(full, 512 * 1024);
+                    if (!looksBinary(bytes)) {
+                        javax.swing.JTextArea area = new javax.swing.JTextArea(decodeText(bytes));
+                        area.setEditable(false);
+                        area.setLineWrap(true);
+                        area.setWrapStyleWord(true);
+                        area.setFont(FontRegistry.mono());
+                        area.setBorder(BorderFactory.createEmptyBorder(
+                                Tokens.GAP_3, Tokens.GAP_3, Tokens.GAP_3, Tokens.GAP_3));
+                        return previewWithFacts(new javax.swing.JScrollPane(area), e, rowIntel);
+                    }
+                }
+                // Media and unknown kinds: the facts the pane already knows.
+                return previewWithFacts(null, e, rowIntel);
+            }
+        }
+    }
+
+    /** Content above, facts below; no content, facts centered. */
+    private javax.swing.JComponent previewWithFacts(javax.swing.JComponent content,
+            FileEntry e, MediaIntel.RowIntel rowIntel) {
+        JPanel p = new JPanel(new BorderLayout());
+        JPanel facts = new JPanel(new java.awt.GridLayout(0, 1, 0, 2));
+        facts.setBorder(BorderFactory.createEmptyBorder(
+                Tokens.GAP_2, Tokens.GAP_3, Tokens.GAP_2, Tokens.GAP_3));
+        facts.add(previewRow("Name", e.name()));
+        if (!e.directory()) facts.add(previewRow("Size", fmtSize(e.size())));
+        facts.add(previewRow("Modified", fmtDate(e.mtimeMillis())));
+        if (rowIntel != null && !rowIntel.type().isEmpty()) {
+            if (!rowIntel.resolution().isEmpty())
+                facts.add(previewRow("Resolution", rowIntel.resolution()));
+            if (!rowIntel.quality().isEmpty())
+                facts.add(previewRow("Calidad", rowIntel.quality()));
+            if (!rowIntel.audio().isEmpty())
+                facts.add(previewRow("Calidad Audio", rowIntel.audio()));
+            if (!rowIntel.bitrate().isEmpty())
+                facts.add(previewRow("Bitrate", rowIntel.bitrate()));
+            if (!rowIntel.estado().isEmpty())
+                facts.add(previewRow("Estado", rowIntel.estado()));
+            if (!rowIntel.subs().isEmpty())
+                facts.add(previewRow("Subtítulos", rowIntel.subs()));
+        }
+        if (content != null) {
+            p.add(content, BorderLayout.CENTER);
+            p.add(facts, BorderLayout.SOUTH);
+        } else {
+            p.add(facts, BorderLayout.CENTER);
+        }
+        return p;
+    }
+
+    private static javax.swing.JComponent previewRow(String label, String value) {
+        JPanel row = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+        row.setOpaque(false);
+        JLabel l = new JLabel(label + "  ");
+        l.setFont(FontRegistry.ui(Tokens.ICON_SMALL));
+        l.setForeground(FileTableModel.muted());
+        JLabel v = new JLabel(value);
+        v.setFont(FontRegistry.mono());
+        row.add(l);
+        row.add(v);
+        return row;
+    }
+
+    private static javax.swing.JComponent previewNote(String text) {
+        JLabel l = new JLabel(text, javax.swing.SwingConstants.CENTER);
+        l.setFont(FontRegistry.ui(Tokens.ICON_SMALL));
+        l.setForeground(FileTableModel.muted());
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBorder(BorderFactory.createEmptyBorder(
+                Tokens.GAP_4, Tokens.GAP_4, Tokens.GAP_4, Tokens.GAP_4));
+        p.add(l, BorderLayout.CENTER);
+        return p;
+    }
+
+    /** A letterboxed image: fits the well, keeps its shape, centers. */
+    private static final class ImageCanvas extends JPanel {
+        private final javax.swing.ImageIcon icon;
+
+        ImageCanvas(byte[] bytes) {
+            icon = new javax.swing.ImageIcon(bytes);
+        }
+
+        int getIconWidth() { return icon.getIconWidth(); }
+
+        @Override protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (icon.getIconWidth() <= 0) return;
+            double scale = Math.min(1.0, Math.min(
+                    getWidth() / (double) icon.getIconWidth(),
+                    getHeight() / (double) icon.getIconHeight()));
+            int w = (int) (icon.getIconWidth() * scale);
+            int h = (int) (icon.getIconHeight() * scale);
+            g.drawImage(icon.getImage(), (getWidth() - w) / 2, (getHeight() - h) / 2, w, h, this);
+        }
+    }
+
+    private static String extOf(String name) {
+        int dot = name.lastIndexOf('.');
+        return dot < 0 ? "" : name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static final java.util.Set<String> TEXT_EXTS = java.util.Set.of(
+            "txt", "nfo", "srt", "ass", "ssa", "vtt", "json", "xml", "html", "htm",
+            "csv", "log", "ps1", "bat", "cmd", "ini", "cfg", "conf", "toml", "yml",
+            "yaml", "properties", "sh", "java", "kt", "rs", "py", "js", "ts", "c", "h");
+
+    private static boolean looksBinary(byte[] b) {
+        int n = Math.min(b.length, 4096);
+        for (int i = 0; i < n; i++) {
+            if (b[i] == 0) return true;
+        }
+        return false;
+    }
+
+    private byte[] readCapped(String fsPath, long cap) throws java.io.IOException {
+        try (java.io.InputStream in = fs.read(fsPath);
+             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+            byte[] buf = new byte[8192];
+            long total = 0;
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                total += n;
+                if (total >= cap) break;
+            }
+            return out.toByteArray();
+        }
+    }
+
+    /** UTF-8 when the bytes are, Windows-1252 when they aren't — the
+     *  subtitle sidecars this fleet ships in. */
+    private static String decodeText(byte[] b) {
+        try {
+            return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(b)).toString();
+        } catch (Exception e) {
+            return new String(b, java.nio.charset.Charset.forName("windows-1252"));
+        }
+    }
+
+    private static String fmtSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        double v = bytes;
+        for (String unit : new String[]{"KB", "MB", "GB", "TB"}) {
+            v /= 1024;
+            if (v < 1024) return String.format(java.util.Locale.ROOT, "%.1f %s", v, unit);
+        }
+        return String.format(java.util.Locale.ROOT, "%.1f PB", v / 1024);
+    }
+
+    private static String fmtDate(long mtimeMillis) {
+        if (mtimeMillis <= 0) return "";
+        return java.text.DateFormat.getDateTimeInstance(
+                java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                .format(new java.util.Date(mtimeMillis));
+    }
 
     /**
      * The keyboard landing point: focuses the table and touches nothing
@@ -470,22 +804,28 @@ public final class FilePane extends JPanel {
         while (table.getColumnCount() > 0) {
             table.removeColumn(table.getColumnModel().getColumn(0));
         }
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < model.getColumnCount(); i++) {
             TableColumn tc = new TableColumn(i);
             tc.setHeaderValue(model.getColumnName(i));
             table.addColumn(tc);
         }
         var cm = table.getColumnModel();
-        cm.getColumn(0).setCellRenderer(new FileTableModel.NameRenderer());
-        cm.getColumn(1).setCellRenderer(new FileTableModel.SizeRenderer());
-        cm.getColumn(2).setCellRenderer(new FileTableModel.DateRenderer());
-        cm.getColumn(3).setCellRenderer(new FileTableModel.AttrsRenderer());
-        cm.getColumn(0).setPreferredWidth(420);
-        cm.getColumn(1).setPreferredWidth(90);
-        cm.getColumn(2).setPreferredWidth(150);
-        cm.getColumn(3).setPreferredWidth(110);
+        for (int i = 0; i < cm.getColumnCount(); i++) {
+            cm.getColumn(i).setCellRenderer(rendererFor(FileTableModel.Column.values()[i]));
+        }
+        int[] widths = {420, 90, 150, 110, 64, 96, 100, 104, 76, 96, 100, 56};
+        for (int i = 0; i < cm.getColumnCount() && i < widths.length; i++) {
+            cm.getColumn(i).setPreferredWidth(widths[i]);
+        }
+        // Media intelligence reads the local disk (probe cache, cert
+        // markers, posters): local panes swap Attrs for the intel columns,
+        // remote panes keep the classic four.
         if (!fs.remote()) {
             cm.removeColumn(cm.getColumn(3));
+        } else {
+            while (cm.getColumnCount() > 4) {
+                cm.removeColumn(cm.getColumn(4));
+            }
         }
 
         // The draft row's name cell edits in place: Enter stops the edit
@@ -525,20 +865,41 @@ public final class FilePane extends JPanel {
         });
 
         // The summary strip follows the selection: totals when nothing is
-        // picked, selection stats while a selection exists.
-        table.getSelectionModel().addListSelectionListener(e -> updateSummary());
+        // picked, selection stats while a selection exists. The space
+        // preview rides the same pulse.
+        table.getSelectionModel().addListSelectionListener(e -> {
+            updateSummary();
+            if (previewOpen) showPreviewForSelection();
+        });
 
         JTableHeader header = table.getTableHeader();
         header.addMouseListener(new MouseAdapter() {
             @Override public void mouseClicked(MouseEvent e) {
                 int col = header.columnAtPoint(e.getPoint());
                 if (col < 0) return;
-                FileTableModel.Column clicked = FileTableModel.Column.values()[col];
+                // View index → model index: the pane's column set drops
+                // columns (Attrs locally, the intel columns remotely), so
+                // the raw view position is not the model's enum position.
+                int modelCol = table.convertColumnIndexToModel(col);
+                if (modelCol < 0) return;
+                FileTableModel.Column clicked = FileTableModel.Column.values()[modelCol];
                 if (clicked == sortColumn) sortAscending = !sortAscending;
                 else { sortColumn = clicked; sortAscending = true; }
                 refreshDisplay();
             }
         });
+    }
+
+    private static javax.swing.table.TableCellRenderer rendererFor(FileTableModel.Column col) {
+        return switch (col) {
+            case NAME -> new FileTableModel.NameRenderer();
+            case SIZE -> new FileTableModel.SizeRenderer();
+            case MODIFIED -> new FileTableModel.DateRenderer();
+            case ATTRS -> new FileTableModel.AttrsRenderer();
+            case ESTADO -> new FileTableModel.EstadoRenderer();
+            case POSTER -> new FileTableModel.PosterRenderer();
+            default -> new FileTableModel.IntelRenderer();
+        };
     }
 
     /** The draft row's editor — the name cell while a new folder is being
@@ -599,6 +960,7 @@ public final class FilePane extends JPanel {
         bind(im, am, "ctrl R", "refresh", () -> navigate(path));
         bind(im, am, "F2", "rename", this::renameSelected);
         bind(im, am, "ctrl D", "new-folder", this::newFolder);
+        bind(im, am, "F7", "new-folder-f7", this::newFolder);
         bind(im, am, "ctrl V", "paste", this::pasteFromClipboard);
         bind(im, am, "DELETE", "delete", this::deleteSelected);
         bind(im, am, "alt ENTER", "properties", this::showProperties);
@@ -612,6 +974,7 @@ public final class FilePane extends JPanel {
         var tam = table.getActionMap();
         bind(tim, tam, "F2", "dock-rename", this::renameSelected);
         bind(tim, tam, "ctrl D", "dock-new-folder", this::newFolder);
+        bind(tim, tam, "F7", "dock-new-folder-f7", this::newFolder);
         bind(tim, tam, "ctrl V", "dock-paste", this::pasteFromClipboard);
         bind(tim, tam, "DELETE", "dock-delete", this::deleteSelected);
         bind(tim, tam, "alt ENTER", "dock-properties", this::showProperties);
@@ -717,14 +1080,14 @@ public final class FilePane extends JPanel {
         load(targetFs, t);
     }
 
-    private void goBack() {
+    public void goBack() {
         if (backStack.isEmpty()) return;
         forwardStack.push(new Place(fs, path));
         Place p = backStack.pop();
         load(p.fs(), p.path());
     }
 
-    private void goForward() {
+    public void goForward() {
         if (forwardStack.isEmpty()) return;
         backStack.push(new Place(fs, path));
         Place p = forwardStack.pop();
@@ -753,12 +1116,16 @@ public final class FilePane extends JPanel {
         Thread.ofVirtual().name("dock-list").start(() -> {
             try {
                 List<FileEntry> entries = targetFs.list(target);
+                Map<String, MediaIntel.RowIntel> listingIntel = targetFs.remote() ? Map.of()
+                        : MediaIntel.forListing(Path.of(target), entries, MediaIntel.cache());
                 List<FileEntry> display = FileTableModel.displayList(
                         withParentRow(entries, target), sortColumn, sortAscending,
-                        ViewSettings.showHidden(), dotPrefixedHidden());
+                        ViewSettings.showHidden(), dotPrefixedHidden(), listingIntel);
                 SwingUtilities.invokeLater(() -> {
                     if (gen != generation) return;
                     current = entries;
+                    intel = listingIntel;
+                    model.setIntel(listingIntel);
                     everListed = true;
                     applyDisplay(display, target);
                     restoreSelection(target);
@@ -830,7 +1197,7 @@ public final class FilePane extends JPanel {
         Thread.ofVirtual().start(() -> {
             List<FileEntry> display = FileTableModel.displayList(
                     withParentRow(current, path), sortColumn, sortAscending,
-                    ViewSettings.showHidden(), dotPrefixedHidden());
+                    ViewSettings.showHidden(), dotPrefixedHidden(), intel);
             SwingUtilities.invokeLater(() -> {
                 if (gen != generation) return;
                 applyDisplay(display, path);
@@ -1036,7 +1403,7 @@ public final class FilePane extends JPanel {
     }
 
     /** Up one level: out of a mount when at its root, the parent otherwise. */
-    private void goUp() {
+    public void goUp() {
         if (fs instanceof ArchiveFs a && path.equals("/")) {
             navigatePlace(a.host(), a.hostDir());
             return;
@@ -1137,8 +1504,42 @@ public final class FilePane extends JPanel {
         peek.setEnabled(peekable.size() == 1 && !peekable.get(0).directory());
         menu.add(peek);
         menu.addSeparator();
+        // Toolkit actions: launch PowerShell scripts on the selected files.
+        JMenu toolkitMenu = new JMenu("Toolkit Actions");
+        toolkitMenu.setIcon(Glyphs.icon(Glyphs.TERMINAL, 15,
+                () -> UIManager.getColor("Label.disabledForeground")));
+        for (var action : dock.terminal.ToolkitActions.all()) {
+            JMenuItem item = new JMenuItem(action.name());
+            // The menu is rebuilt on every invocation, so availability is
+            // read live: adding the toolkit folder enables the items without
+            // a restart. The tooltip says why they are not.
+            boolean ready = dock.terminal.ToolkitActions.isAvailable(action);
+            item.setEnabled(ready);
+            item.setToolTipText(ready ? action.description()
+                    : dock.terminal.ToolkitActions.missingMessage(action));
+            item.addActionListener(ev -> launchToolkitAction(action));
+            toolkitMenu.add(item);
+        }
+        menu.add(toolkitMenu);
         menu.add(item("Refresh", Glyphs.SYNC, "ctrl R", () -> navigate(path)));
         return menu;
+    }
+
+    /**
+     * Launches a toolkit action on the currently selected files. The action runs
+     * in the current pane's directory. If no files are selected, the action runs
+     * on the directory itself. ToolkitActions.launch surfaces the shell in a
+     * terminal tab, so the user watches the script run.
+     */
+    private void launchToolkitAction(dock.terminal.ToolkitActions.Action action) {
+        try {
+            dock.terminal.ToolkitActions.launch(action, selectedPaths(), path);
+        } catch (java.io.IOException e) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Failed to launch " + action.name() + ": " + e.getMessage(),
+                    "Toolkit Action Error",
+                    javax.swing.JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     /** Accelerator strings match bindKeys() specs so the shown shortcut can
@@ -1157,10 +1558,21 @@ public final class FilePane extends JPanel {
      * until Enter commits the name; Escape (or any refresh that replaces
      * the listing) discards the row.
      */
-    private void newFolder() {
+    public void newFolder() {
+        beginDraft(true, "New folder");
+    }
+
+    /** File menu: an empty file named in place, the same draft flow a new
+     *  folder takes. */
+    public void newFile() {
+        beginDraft(false, "New file.txt");
+    }
+
+    private void beginDraft(boolean folder, String seedName) {
         if (fs.immutableListing(path)) return;    // a share list holds no drafts
         if (draftEntry != null) return;    // one draft at a time
-        draftEntry = new FileEntry("", true, 0, 0, null, false);
+        draftIsFolder = folder;
+        draftEntry = new FileEntry("", folder, 0, 0, null, false);
         model.setDraft(draftEntry);
         int row = model.getRowCount() > 0 && model.row(0) == FileEntry.PARENT ? 1 : 0;
         model.insertRow(row, draftEntry);
@@ -1170,13 +1582,13 @@ public final class FilePane extends JPanel {
         table.scrollRectToVisible(table.getCellRect(row, 0, true));
         table.editCellAt(row, 0);
         JTextField field = (JTextField) table.getEditorComponent();
-        field.setText("New folder");
+        field.setText(seedName);
         field.selectAll();
         field.requestFocusInWindow();
     }
 
-    /** The draft's end: commit mkdirs and lands the cursor on the new
-     *  folder; cancel just drops the row. */
+    /** The draft's end: commit mkdirs (or an empty file) and land the
+     *  cursor on the new entry; cancel just drops the row. */
     private void finishDraft(boolean commit) {
         FileEntry draft = draftEntry;
         if (draft == null) return;
@@ -1187,7 +1599,15 @@ public final class FilePane extends JPanel {
         model.removeRow(draft);
         if (name.isEmpty()) return;
         pendingCursorName = name;
-        runOp(() -> fs.mkdir(fs.child(path, name)), "create folder " + name);
+        if (draftIsFolder) {
+            runOp(() -> fs.mkdir(fs.child(path, name)), "create folder " + name);
+        } else {
+            runOp(() -> {
+                try (var out = fs.write(fs.child(path, name), false)) {
+                    // open + close: an empty file is the whole point
+                }
+            }, "create file " + name);
+        }
     }
 
     private void renameSelected() {
@@ -1251,6 +1671,16 @@ public final class FilePane extends JPanel {
         return out;
     }
 
+    /** Full paths of the current selection, or the pane's directory itself
+     *  when nothing is selected — what a toolkit action should run against. */
+    public List<String> selectedPaths() {
+        List<FileEntry> selected = selectedEntries();
+        if (selected.isEmpty()) return List.of(path);
+        List<String> out = new ArrayList<>(selected.size());
+        for (FileEntry e : selected) out.add(fs.child(path, e.name()));
+        return out;
+    }
+
     /** Runs a blocking op off-EDT, then refreshes; errors become toasts. */
     private void runOp(IoOp op, String what) {
         setBusy(true);
@@ -1306,8 +1736,9 @@ public final class FilePane extends JPanel {
     /** Ctrl+V: files copied in the OS file explorer paste straight into
      *  the pane's directory — the exact import the drag-and-drop path
      *  takes, so dropping and pasting behave identically (grouping by
-     *  source directory, one transfer job per group). */
-    private void pasteFromClipboard() {
+     *  source directory, one transfer job per group). A dock payload cut
+     *  into the clipboard pastes as a move. */
+    public void pasteFromClipboard() {
         if (fs.immutableListing(path)) return;
         java.awt.datatransfer.Transferable t = clipboard.get();
         if (t == null || !(t.isDataFlavorSupported(DOCK_FLAVOR)
@@ -1319,13 +1750,65 @@ public final class FilePane extends JPanel {
         dropInto(t);
     }
 
+    /** Ctrl+C / Ctrl+X: the selection onto the system clipboard — a dock
+     *  payload for in-app pastes, an OS file list for local selections so
+     *  Explorer and friends can paste them too. */
+    public void copySelectionToClipboard(boolean cut) {
+        copySelectionToClipboard(cut,
+                java.awt.Toolkit.getDefaultToolkit().getSystemClipboard());
+    }
+
+    void copySelectionToClipboard(boolean cut, java.awt.datatransfer.Clipboard cb) {
+        List<FileEntry> selected = selectedEntries();
+        if (selected.isEmpty()) {
+            Toast.show(this, "Nothing selected to copy.", Glyphs.INFO);
+            return;
+        }
+        DockTransferable t = new DockTransferable(new DragPayload(fs, path(), selected, cut));
+        try {
+            cb.setContents(t, null);
+            Toast.show(this, (cut ? "Cut " : "Copied ") + selected.size()
+                    + (selected.size() == 1 ? " item." : " items."), Glyphs.INFO);
+        } catch (IllegalStateException e) {
+            Toast.show(this, "The clipboard is locked by another app.", Glyphs.WARNING);
+        }
+    }
+
+    /** Ctrl+Shift+C: the selection's full paths as text. */
+    public void copyPathsToClipboard() {
+        List<String> paths = selectedPaths();
+        try {
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .setContents(new java.awt.datatransfer.StringSelection(
+                            String.join("\n", paths)), null);
+            Toast.show(this, "Copied " + paths.size()
+                    + (paths.size() == 1 ? " path." : " paths."), Glyphs.INFO);
+        } catch (IllegalStateException e) {
+            Toast.show(this, "The clipboard is locked by another app.", Glyphs.WARNING);
+        }
+    }
+
+    /** Ctrl+A: every row, ".." included — deletion already skips it. */
+    public void selectAllRows() {
+        if (model.getRowCount() > 0) {
+            table.setRowSelectionInterval(0, model.getRowCount() - 1);
+        }
+    }
+
+    /** Ctrl+F: opens the pane's speed-search box over the list. */
+    public void openFilter() {
+        speed.start();
+    }
+
     // ---- drag & drop ----
 
-    /** Payload dragged between the app's panes (same JVM only). */
-    public record DragPayload(FileSystem fs, String srcDir, List<FileEntry> entries) {}
+    /** Payload copied or dragged between the app's panes (same JVM only);
+     *  {@code cut} pastes as a move. */
+    public record DragPayload(FileSystem fs, String srcDir, List<FileEntry> entries,
+            boolean cut) {}
 
     public static final java.awt.datatransfer.DataFlavor DOCK_FLAVOR =
-            new java.awt.datatransfer.DataFlavor(DragPayload.class, "Universal Explorer files");
+            new java.awt.datatransfer.DataFlavor(DragPayload.class, "Universal Media Explorer files");
 
     private final class DragOut extends javax.swing.TransferHandler {
         @Override
@@ -1334,7 +1817,7 @@ public final class FilePane extends JPanel {
             if (fs.immutableListing(path) && !fs.extractable(path)) return null;
             List<FileEntry> selected = selectedEntries();
             if (selected.isEmpty()) return null;
-            return new DockTransferable(new DragPayload(fs, path(), selected));
+            return new DockTransferable(new DragPayload(fs, path(), selected, false));
         }
 
         @Override
@@ -1369,7 +1852,8 @@ public final class FilePane extends JPanel {
                     return false;
                 }
                 dock.core.transfer.TransferEngine.GLOBAL.enqueue(
-                        payload.fs(), payload.srcDir(), payload.entries(), fs, path(), false);
+                        payload.fs(), payload.srcDir(), payload.entries(), fs, path(),
+                        payload.cut());
                 return true;
             }
             if (t.isDataFlavorSupported(java.awt.datatransfer.DataFlavor.javaFileListFlavor)) {

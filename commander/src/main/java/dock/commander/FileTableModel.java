@@ -13,6 +13,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import javax.swing.JTable;
 import javax.swing.UIManager;
 import javax.swing.table.AbstractTableModel;
@@ -25,13 +26,25 @@ import javax.swing.table.DefaultTableCellRenderer;
  */
 public final class FileTableModel extends AbstractTableModel {
 
-    public enum Column { NAME, SIZE, MODIFIED, ATTRS }
+    /**
+     * NAME..ATTRS are the classic columns; TYPE..POSTER mirror
+     * SimpleCommander's media intelligence (fed by {@link MediaIntel} for
+     * local listings — remote panes build a column set without them).
+     */
+    public enum Column { NAME, SIZE, MODIFIED, ATTRS,
+                         TYPE, RESOLUTION, QUALITY, AUDIO, BITRATE, ESTADO, SUBS, POSTER }
 
-    private static final String[] HEADERS = {"Name", "Size", "Modified", "Attrs"};
+    private static final String[] HEADERS = {"Name", "Size", "Modified", "Attrs",
+            "Type", "Resolution", "Calidad", "Calidad Audio", "Bitrate",
+            "Estado", "Subtítulos", "Poster"};
     private static final DateTimeFormatter DATE =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
     private List<FileEntry> rows = List.of();
+    /** Media-intel labels for the current listing, keyed by entry name;
+     *  rows the cache knows nothing about read EMPTY. Set (before
+     *  {@link #setData}) by the pane when a listing commits. */
+    private Map<String, MediaIntel.RowIntel> intel = Map.of();
 
     /** The glyph kind of the ".." row: the folder-open everywhere except
      *  inside a mount, where every ".." — root or deeper — wears the
@@ -41,6 +54,21 @@ public final class FileTableModel extends AbstractTableModel {
     public void setData(List<FileEntry> rows) {
         this.rows = rows;
         fireTableDataChanged();
+    }
+
+    /** Swaps the intel for the listing about to be set — call before
+     *  {@link #setData} so every cell of the same fire reads consistently. */
+    public void setIntel(Map<String, MediaIntel.RowIntel> intel) {
+        this.intel = intel != null ? intel : Map.of();
+    }
+
+    MediaIntel.RowIntel intelFor(int row) {
+        return intelOf(intel, rows.get(row));
+    }
+
+    static MediaIntel.RowIntel intelOf(Map<String, MediaIntel.RowIntel> intel, FileEntry e) {
+        MediaIntel.RowIntel r = intel.get(e.name());
+        return r != null ? r : MediaIntel.RowIntel.EMPTY;
     }
 
     public FileEntry row(int viewIndex) { return rows.get(viewIndex); }
@@ -53,6 +81,14 @@ public final class FileTableModel extends AbstractTableModel {
      */
     public static List<FileEntry> displayList(List<FileEntry> raw, Column sort, boolean asc,
                                                boolean showHidden, boolean hideDotPrefixed) {
+        return displayList(raw, sort, asc, showHidden, hideDotPrefixed, Map.of());
+    }
+
+    /** As above, with the listing's media intel — the intelligence columns
+     *  sort by numeric facts (pixels, kbps, counts), not their labels. */
+    public static List<FileEntry> displayList(List<FileEntry> raw, Column sort, boolean asc,
+                                               boolean showHidden, boolean hideDotPrefixed,
+                                               Map<String, MediaIntel.RowIntel> intel) {
         List<FileEntry> visible = new ArrayList<>(raw.size());
         FileEntry parent = null;
         for (FileEntry e : raw) {
@@ -65,6 +101,15 @@ public final class FileTableModel extends AbstractTableModel {
             case SIZE -> Comparator.comparingLong(FileEntry::size);
             case MODIFIED -> Comparator.comparingLong(FileEntry::mtimeMillis);
             case ATTRS -> Comparator.comparing(e -> attrsString(e));
+            case TYPE -> Comparator.comparing(e -> intelOf(intel, e).type());
+            case RESOLUTION -> Comparator.comparingLong(e -> intelOf(intel, e).pixels());
+            case QUALITY -> Comparator.comparingInt(e -> intelOf(intel, e).qualityRank());
+            case AUDIO -> Comparator.comparingInt((FileEntry e) -> intelOf(intel, e).audioCount())
+                    .thenComparing(e -> intelOf(intel, e).audio());
+            case BITRATE -> Comparator.comparingLong(e -> intelOf(intel, e).bitrateKbps());
+            case ESTADO -> Comparator.comparing(e -> intelOf(intel, e).estado());
+            case SUBS -> Comparator.comparingInt(e -> intelOf(intel, e).subCount());
+            case POSTER -> Comparator.comparing(e -> intelOf(intel, e).poster());
         };
         if (!asc) cmp = cmp.reversed();
         visible.sort(cmp);
@@ -121,6 +166,14 @@ public final class FileTableModel extends AbstractTableModel {
             case SIZE -> sizeString(e);
             case MODIFIED -> dateString(e);
             case ATTRS -> attrsString(e);
+            case TYPE -> intelOf(intel, e).type();
+            case RESOLUTION -> intelOf(intel, e).resolution();
+            case QUALITY -> intelOf(intel, e).quality();
+            case AUDIO -> intelOf(intel, e).audio();
+            case BITRATE -> intelOf(intel, e).bitrate();
+            case ESTADO -> intelOf(intel, e).estado();
+            case SUBS -> intelOf(intel, e).subs();
+            case POSTER -> intelOf(intel, e).poster() ? "✓" : "";
         };
     }
 
@@ -308,6 +361,49 @@ public final class FileTableModel extends AbstractTableModel {
         AttrsRenderer() {
             super(FontRegistry.mono(FontRegistry.BASE_SIZE - 1));
             setForeground(muted());
+        }
+    }
+
+    /** The media-intelligence text columns: mono, one size down, muted —
+     *  the data whispers, the name speaks. */
+    static final class IntelRenderer extends MonoRenderer {
+        IntelRenderer() {
+            super(FontRegistry.mono(FontRegistry.BASE_SIZE - 1));
+            setForeground(muted());
+        }
+    }
+
+    /** Estado: a directory's cert badge reads strong (SimpleCommander's
+     *  bold badge), a file's probe badge stays muted, and the reason the
+     *  engine recorded rides the cell's tooltip. */
+    static final class EstadoRenderer extends MonoRenderer {
+        EstadoRenderer() {
+            super(FontRegistry.mono(FontRegistry.BASE_SIZE - 1));
+        }
+
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value,
+                boolean isSelected, boolean hasFocus, int row, int column) {
+            var c = super.getTableCellRendererComponent(table, value, isSelected,
+                    hasFocus, row, column);
+            FileTableModel m = (FileTableModel) table.getModel();
+            MediaIntel.RowIntel r = m.intelFor(row);
+            if (m.row(row).directory() && !r.estado().isEmpty()) {
+                setFont(FontRegistry.monoMedium(FontRegistry.BASE_SIZE - 1));
+                setForeground(c.getForeground());
+            } else {
+                setForeground(muted());
+            }
+            setToolTipText(r.estadoReason().isEmpty() ? null : r.estadoReason());
+            return c;
+        }
+    }
+
+    /** Poster: the check mark reads at full strength — a found poster is
+     *  the one intelligence cell that means "this folder is complete". */
+    static final class PosterRenderer extends MonoRenderer {
+        PosterRenderer() {
+            super(FontRegistry.monoMedium(FontRegistry.BASE_SIZE));
         }
     }
 
