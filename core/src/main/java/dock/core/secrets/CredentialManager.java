@@ -9,11 +9,15 @@ import dock.core.platform.Platform;
  */
 public final class CredentialManager {
 
-    /** The app was Project Dock once. Loads that miss a current target
-     *  retry its legacy "Dock/…" twin and copy the secret forward; deletes
-     *  take the twin down too, so no stale credential outlives the site. */
-    private static final String TARGET_PREFIX = "Universal Explorer/";
-    private static final String LEGACY_TARGET_PREFIX = "Dock/";
+    /** The app was Project Dock once, then Universal Explorer. Loads that
+     *  miss a current target retry legacy twins ("Universal Explorer/…"
+     *  then "Dock/…") and copy the secret forward; deletes take the twins
+     *  down too, so no stale credential outlives the site. */
+    private static final String TARGET_PREFIX = "Universal Media Explorer/";
+    private static final String[] LEGACY_PREFIXES = {
+        "Universal Explorer/",
+        "Dock/"
+    };
 
     private CredentialManager() {}
 
@@ -33,14 +37,20 @@ public final class CredentialManager {
     }
 
     /** Returns null when nothing is stored (or the OS has no store). A miss
-     *  on a current target retries the legacy twin and copies the secret
+     *  on a current target retries the legacy twins and copies the secret
      *  forward — the fallback never destroys the old entry. */
     public static String load(String target) {
         if (!available()) return null;
         String secret = store().read(target);
         if (secret == null && target.startsWith(TARGET_PREFIX)) {
-            secret = store().read(LEGACY_TARGET_PREFIX + target.substring(TARGET_PREFIX.length()));
-            if (secret != null) store().write(target, secret);
+            String suffix = target.substring(TARGET_PREFIX.length());
+            for (String legacyPrefix : LEGACY_PREFIXES) {
+                secret = store().read(legacyPrefix + suffix);
+                if (secret != null) {
+                    store().write(target, secret);
+                    break;
+                }
+            }
         }
         return secret;
     }
@@ -49,7 +59,10 @@ public final class CredentialManager {
         if (!available()) return;
         store().remove(target);
         if (target.startsWith(TARGET_PREFIX)) {
-            store().remove(LEGACY_TARGET_PREFIX + target.substring(TARGET_PREFIX.length()));
+            String suffix = target.substring(TARGET_PREFIX.length());
+            for (String legacyPrefix : LEGACY_PREFIXES) {
+                store().remove(legacyPrefix + suffix);
+            }
         }
     }
 

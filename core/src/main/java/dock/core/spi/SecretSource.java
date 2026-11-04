@@ -12,9 +12,9 @@ public interface SecretSource {
 
     /**
      * The secret stored under a credential target ({@code
-     * Universal Explorer/<site>} for the password, {@code
-     * Universal Explorer/<site>/key} for a key passphrase; targets saved
-     * before the rename still load via CredentialManager's legacy
+     * Universal Media Explorer/<site>} for the password, {@code
+     * Universal Media Explorer/<site>/key} for a key passphrase; targets
+     * saved before the rename still load via CredentialManager's legacy
      * fallback), or null when nothing is stored there.
      */
     char[] load(String credentialTarget);

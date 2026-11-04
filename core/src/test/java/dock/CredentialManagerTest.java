@@ -37,7 +37,7 @@ class CredentialManagerTest {
     void legacyDockTargetsLoadAndCopyForward() {
         Assumptions.assumeTrue(CredentialManager.available(), "no OS credential store");
         String legacy = "Dock/renamed-selftest";
-        String current = "Universal Explorer/renamed-selftest";
+        String current = "Universal Media Explorer/renamed-selftest";
         try {
             CredentialManager.save(legacy, "pre-rename-secret");
             assertEquals("pre-rename-secret", CredentialManager.load(current),
@@ -51,14 +51,31 @@ class CredentialManagerTest {
     }
 
     @Test
+    void legacyUniversalExplorerTargetsLoadAndCopyForward() {
+        Assumptions.assumeTrue(CredentialManager.available(), "no OS credential store");
+        String legacy = "Universal Explorer/renamed-selftest-2";
+        String current = "Universal Media Explorer/renamed-selftest-2";
+        try {
+            CredentialManager.save(legacy, "pre-rename-secret-2");
+            assertEquals("pre-rename-secret-2", CredentialManager.load(current),
+                    "the Universal Explorer legacy twin must still serve the secret");
+            CredentialManager.delete(legacy);
+            assertEquals("pre-rename-secret-2", CredentialManager.load(current),
+                    "the fallback must have stored the copy before the original went");
+        } finally {
+            CredentialManager.delete(current);
+        }
+    }
+
+    @Test
     void deletingATargetPurgesItsLegacyTwin() {
         Assumptions.assumeTrue(CredentialManager.available(), "no OS credential store");
         try {
             CredentialManager.save("Dock/twin-selftest", "stale");
-            CredentialManager.delete("Universal Explorer/twin-selftest");
+            CredentialManager.delete("Universal Media Explorer/twin-selftest");
             assertNull(CredentialManager.load("Dock/twin-selftest"));
         } finally {
-            CredentialManager.delete("Universal Explorer/twin-selftest");
+            CredentialManager.delete("Universal Media Explorer/twin-selftest");
         }
     }
 }
