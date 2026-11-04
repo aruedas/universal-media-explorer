@@ -18,32 +18,78 @@ import java.util.Map;
  * bookmark — where playback stood on this site's files, keyed by full
  * path with the file's mtime as the staleness guard. {@code region}
  * scopes S3's request signatures (null means the endpoint's own
- * default, us-east-1).
+ * default, us-east-1). {@code sftp} carries MINA SSHD tuning options.
  */
 public record Site(String name, Protocol protocol, String host, int port, String user,
                    String keyPath, boolean useAgent, String domain, String initialPath,
                    boolean guest, boolean secure, long lastUsed,
                    String lastLocalPath, String lastRemotePath,
-                   Map<String, Playback> playback, String region) {
+                   Map<String, Playback> playback, String region,
+                   SftpOptions sftp) {
 
     /** Where playback stood on one file, and the file's mtime then — a
      *  mismatch means the bookmark belongs to a file that no longer
      *  exists. */
     public record Playback(long positionMs, long mtimeMs) {}
 
+    /**
+     * MINA SSHD tuning for one SFTP site. A site with no options at all
+     * (null) dials exactly as before these toggles existed: the app's
+     * keepalive, MINA's own proposals, nothing forced.
+     *
+     * @param compression offer zlib/zlib@openssh.com; MINA proposes "none"
+     *                    alone unless asked, so off and unset look alike on
+     *                    the wire
+     * @param timeoutSec connect/auth budget, in place of the 30s constant
+     * @param keepaliveIntervalSec reply-expecting keepalive cadence
+     * @param keepaliveMaxCount unanswered keepalives before declaring dead
+     * @param transferBufferKb SFTP read/write buffer size
+     * @param utf8Filenames filename encoding; false is the SFTP v3 wire
+     *                      default (ISO-8859-1)
+     */
+    public record SftpOptions(
+            Boolean compression,
+            Integer timeoutSec,
+            Integer keepaliveIntervalSec,
+            Integer keepaliveMaxCount,
+            Integer transferBufferKb,
+            Boolean utf8Filenames
+    ) {
+        /** Defaults: sensible values for most connections. */
+        public static SftpOptions defaults() {
+            return new SftpOptions(
+                    false,   // compression off by default
+                    30,      // 30s connect/auth
+                    30,      // 30s keepalive
+                    3,       // 3 missed keepalives = dead
+                    64,      // 64KB buffer
+                    true     // UTF-8 filenames
+            );
+        }
+    }
+
     public Site(String name, Protocol protocol, String host, int port, String user,
                 String keyPath, boolean useAgent, String domain, String initialPath,
                 boolean guest, boolean secure, long lastUsed,
                 String lastLocalPath, String lastRemotePath) {
         this(name, protocol, host, port, user, keyPath, useAgent, domain, initialPath,
-                guest, secure, lastUsed, lastLocalPath, lastRemotePath, null, null);
+                guest, secure, lastUsed, lastLocalPath, lastRemotePath, null, null, null);
+    }
+
+    public Site(String name, Protocol protocol, String host, int port, String user,
+                String keyPath, boolean useAgent, String domain, String initialPath,
+                boolean guest, boolean secure, long lastUsed,
+                String lastLocalPath, String lastRemotePath,
+                Map<String, Playback> playback, String region) {
+        this(name, protocol, host, port, user, keyPath, useAgent, domain, initialPath,
+                guest, secure, lastUsed, lastLocalPath, lastRemotePath, playback, region, null);
     }
 
     public Site(String name, Protocol protocol, String host, int port, String user,
                 String keyPath, boolean useAgent, String domain, String initialPath,
                 boolean guest, boolean secure, long lastUsed) {
         this(name, protocol, host, port, user, keyPath, useAgent, domain, initialPath,
-                guest, secure, lastUsed, null, null, null, null);
+                guest, secure, lastUsed, null, null, null, null, null);
     }
 
     public Site(String name, Protocol protocol, String host, int port, String user,
@@ -82,32 +128,40 @@ public record Site(String name, Protocol protocol, String host, int port, String
     public Site withLastUsed(long epochMillis) {
         return new Site(name, protocol, host, port, user, keyPath, useAgent,
                 domain, initialPath, guest, secure, epochMillis,
-                lastLocalPath, lastRemotePath, playback, region);
+                lastLocalPath, lastRemotePath, playback, region, sftp);
     }
 
     /** The path memory: where the panes last stood on this site. */
     public Site withPaths(String localDir, String remoteDir) {
         return new Site(name, protocol, host, port, user, keyPath, useAgent,
                 domain, initialPath, guest, secure, lastUsed, localDir, remoteDir,
-                playback, region);
+                playback, region, sftp);
     }
 
     /** The player's bookmark shelf. */
     public Site withPlayback(Map<String, Playback> playback) {
         return new Site(name, protocol, host, port, user, keyPath, useAgent,
                 domain, initialPath, guest, secure, lastUsed,
-                lastLocalPath, lastRemotePath, playback, region);
+                lastLocalPath, lastRemotePath, playback, region, sftp);
+    }
+
+    /** The MINA SSHD tuning shelf. */
+    public Site withSftp(SftpOptions sftp) {
+        return new Site(name, protocol, host, port, user, keyPath, useAgent,
+                domain, initialPath, guest, secure, lastUsed,
+                lastLocalPath, lastRemotePath, playback, region, sftp);
     }
 
     /** Credential Manager target for this site's password/passphrase.
-     *  Pre-rename "Dock/…" targets still load: CredentialManager falls
-     *  back to the legacy twin and copies the secret forward. */
+     *  Pre-rename "Universal Explorer/…" and "Dock/…" targets still load:
+     *  CredentialManager falls back to the legacy twins and copies the
+     *  secret forward. */
     public String secretTarget() {
-        return "Universal Explorer/" + name;
+        return "Universal Media Explorer/" + name;
     }
 
     /** Credential Manager target for the key passphrase. */
     public String keySecretTarget() {
-        return "Universal Explorer/" + name + "/key";
+        return "Universal Media Explorer/" + name + "/key";
     }
 }

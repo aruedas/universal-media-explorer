@@ -39,7 +39,7 @@ class SiteProtocolTest {
         assertEquals("root", s.user());
         assertEquals("WORKGROUP", s.domain());
         assertEquals("Public", s.initialPath());
-        assertEquals("Universal Explorer/unit-nas", s.secretTarget(),
+        assertEquals("Universal Media Explorer/unit-nas", s.secretTarget(),
                 "SMB sites share the SFTP secret target scheme");
     }
 
@@ -211,6 +211,36 @@ class SiteProtocolTest {
             Site s = Sites.load().get(0);
             assertNull(s.lastLocalPath(), "sessions saved before path memory open unplaced");
             assertNull(s.lastRemotePath());
+        } finally {
+            AppPaths.override(configDir);
+        }
+    }
+
+    @Test
+    void sftpOptionsRoundTripThroughSessionsJson() throws Exception {
+        Sites.upsert(new Site("unit-tuned", "nas", 22, "root", null)
+                .withSftp(new Site.SftpOptions(true, 12, 45, 4, 256, false)));
+        Site s = Sites.load().stream()
+                .filter(x -> x.name().equals("unit-tuned")).findFirst().orElseThrow();
+        assertEquals(new Site.SftpOptions(true, 12, 45, 4, 256, false), s.sftp(),
+                "every toggle survives a restart");
+
+        Sites.upsert(new Site("unit-plain", "nas", 22, "root", null));
+        Site plain = Sites.load().stream()
+                .filter(x -> x.name().equals("unit-plain")).findFirst().orElseThrow();
+        assertNull(plain.sftp(), "a site that never opened the options stores none");
+    }
+
+    @Test
+    void sessionsSavedBeforeTransportOptionsReadAsUnset() throws Exception {
+        Path legacy = Files.createTempDirectory("dock-legacy-sftp");
+        AppPaths.override(legacy);
+        try {
+            Files.writeString(legacy.resolve("sessions.json"), """
+                    [{"name":"old-box","host":"198.51.100.9","port":22,"user":"admin"}]
+                    """);
+            Site s = Sites.load().get(0);
+            assertNull(s.sftp(), "an option-less site dials as it always did");
         } finally {
             AppPaths.override(configDir);
         }
