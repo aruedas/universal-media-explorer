@@ -75,6 +75,26 @@ class EditSiteDialogTest {
         assertEquals("/srv", s.lastRemotePath());
     }
 
+    /** Transport options belong to the entry an edit saves: a site tuned
+     *  once dials tuned from then on. */
+    @Test
+    void theEditFormSavesTransportOptionsWithTheEntry() throws Exception {
+        Sites.upsert(new Site("unit-opts", "nas", 22, "root", null));
+        Site stored = Sites.load().stream()
+                .filter(s -> s.name().equals("unit-opts")).findFirst().orElseThrow();
+        Site.SftpOptions opts = new Site.SftpOptions(true, 12, 45, 4, 256, false);
+        CountDownLatch saved = new CountDownLatch(1);
+        SwingUtilities.invokeAndWait(() -> {
+            ConnectDialog d = new ConnectDialog(null, stored, s -> saved.countDown());
+            d.setSftpOptions(opts);
+            d.primaryButtonForTest().doClick();
+        });
+        assertTrue(saved.await(10, TimeUnit.SECONDS), "the save completed");
+        Site s = Sites.load().stream()
+                .filter(x -> x.name().equals("unit-opts")).findFirst().orElseThrow();
+        assertEquals(opts, s.sftp(), "the toggles are stored with the site");
+    }
+
     @Test
     void theConnectFlavoredEditKeepsItsConnectButton() throws Exception {
         Site site = new Site("unit-conn", "nas", 22, "root", null);

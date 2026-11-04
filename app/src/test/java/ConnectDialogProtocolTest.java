@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -106,6 +107,53 @@ class ConnectDialogProtocolTest {
         Object spec = d.specForTest();
         var sftp = assertInstanceOf(dock.sftp.SshSessions.ConnectionSpec.class, spec);
         assertEquals(22, sftp.port());
+        d.dispose();
+    }
+
+    @Test
+    void transportOptionsBelongToSftpAlone() {
+        ConnectDialog d = new ConnectDialog(null, (session, name) -> {});
+        assertTrue(d.transportRowVisible(), "SFTP has a transport to tune");
+        assertFalse(d.transportOptionsOpen(), "closed until the owner opens it");
+        assertNull(d.sftpOptions(), "a closed form contributes nothing");
+        var sftp = assertInstanceOf(dock.sftp.SshSessions.ConnectionSpec.class, d.specForTest());
+        assertNull(sftp.sftpOptions(), "so the dial keeps the defaults it always had");
+
+        d.protocolForTest().setSelectedItem("SMB");
+        assertFalse(d.transportRowVisible(), "SMB has no SSH transport to tune");
+        assertNull(d.sftpOptions(), "and hides what it cannot offer");
+        d.dispose();
+    }
+
+    @Test
+    void openedOptionsRideTheDialSpec() {
+        ConnectDialog d = new ConnectDialog(null, (session, name) -> {});
+        Site.SftpOptions opts = new Site.SftpOptions(true, 12, 45, 4, 256, false);
+        d.setSftpOptions(opts);
+        assertTrue(d.transportOptionsOpen(), "options handed in open the body");
+        assertEquals(opts, d.sftpOptions(), "what the form shows is what it hands over");
+        var sftp = assertInstanceOf(dock.sftp.SshSessions.ConnectionSpec.class, d.specForTest());
+        assertEquals(opts, sftp.sftpOptions(), "the spec carries them to the dial");
+        d.dispose();
+    }
+
+    @Test
+    void editingASiteWithoutOptionsLeavesThemUnset() {
+        Site site = new Site("unit-plain", "nas", 22, "root", null);
+        ConnectDialog d = new ConnectDialog(null, site, (session, name) -> {});
+        assertTrue(d.transportRowVisible());
+        assertFalse(d.transportOptionsOpen(), "an option-less site opens closed");
+        assertNull(d.sftpOptions());
+        d.dispose();
+    }
+
+    @Test
+    void editingASiteWithOptionsShowsThemAgain() {
+        Site site = new Site("unit-tuned", "nas", 22, "root", null)
+                .withSftp(new Site.SftpOptions(true, 12, 45, 4, 256, false));
+        ConnectDialog d = new ConnectDialog(null, site, (session, name) -> {});
+        assertTrue(d.transportOptionsOpen(), "a tuned site opens to what it holds");
+        assertEquals(site.sftp(), d.sftpOptions(), "each toggle reads back as saved");
         d.dispose();
     }
 

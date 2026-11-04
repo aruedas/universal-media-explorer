@@ -28,7 +28,8 @@ public final class SftpBackend implements ProtocolBackend {
             SshSessions.ConnectionSpec spec;
             if (site.useAgent()) {
                 spec = new SshSessions.ConnectionSpec(
-                        site.user(), site.host(), site.port(), null, null, null, true);
+                        site.user(), site.host(), site.port(), null, null, null, true,
+                        site.sftp());
             } else {
                 if (site.keyPath() == null) {
                     password = secrets.load(site.secretTarget());
@@ -40,7 +41,7 @@ public final class SftpBackend implements ProtocolBackend {
                 }
                 spec = new SshSessions.ConnectionSpec(
                         site.user(), site.host(), site.port(), password,
-                        site.keyPath(), passphrase, false);
+                        site.keyPath(), passphrase, false, site.sftp());
             }
             SftpFs fs = SshSessions.connect(spec, HostKeys.verifier(), null);
             return new SftpSession(fs, spec);

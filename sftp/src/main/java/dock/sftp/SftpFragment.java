@@ -54,18 +54,19 @@ public final class SftpFragment implements ConnectionFragment {
         char[] password = viaKey || mode.agent() ? null : form.password();
         char[] pass = viaKey ? form.passphrase() : null;
         return new SshSessions.ConnectionSpec(form.user(), form.host(), form.port(),
-                password, keyPath, pass, mode.agent());
+                password, keyPath, pass, mode.agent(), form.sftpOptions());
     }
 
     @Override
     public Site siteFromForm(String name, AuthMode mode, ConnectForm form) {
         return new Site(name, Protocol.SFTP, form.host(), form.port(), form.user(),
                 mode.key() ? form.keyPath() : null, mode.agent(), null, null,
-                false, false, 0, null, null);
+                false, false, 0, null, null).withSftp(form.sftpOptions());
     }
 
     @Override
     public void fill(Site site, ConnectForm form) {
         form.setKeyPath(site.keyPath() == null ? "" : site.keyPath());
+        form.setSftpOptions(site.sftp());
     }
 }

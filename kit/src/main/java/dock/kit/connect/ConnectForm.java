@@ -37,6 +37,13 @@ public interface ConnectForm {
 
     void setKeyPath(String keyPath);
 
+    /** The transport options as the form shows them; null while they are
+     *  unopened, which means "dial with the defaults". */
+    dock.core.config.Site.SftpOptions sftpOptions();
+
+    /** Edit mode: puts a saved site's transport options back in the form. */
+    void setSftpOptions(dock.core.config.Site.SftpOptions options);
+
     /** The auth mode currently selected in the picker. */
     AuthMode authMode();
 }

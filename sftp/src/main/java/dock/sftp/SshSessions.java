@@ -2,6 +2,7 @@ package dock.sftp;
 
 import dock.sftp.SftpFs;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
@@ -12,9 +13,11 @@ import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.PropertyResolverUtils;
+import org.apache.sshd.common.compression.BuiltinCompressions;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.util.security.SecurityUtils;
 import org.apache.sshd.core.CoreModuleProperties;
+import org.apache.sshd.sftp.SftpModuleProperties;
 
 /**
  * Connects SFTP sessions. One connect = one virtual thread's blocking
@@ -22,8 +25,8 @@ import org.apache.sshd.core.CoreModuleProperties;
  */
 public final class SshSessions {
 
-    public static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(15);
-    public static final Duration AUTH_TIMEOUT = Duration.ofSeconds(15);
+    public static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(30);
+    public static final Duration AUTH_TIMEOUT = Duration.ofSeconds(30);
     /** Keepalive cadence; also keeps NAT/firewall mappings from idling out. */
     public static final Duration KEEPALIVE_INTERVAL = Duration.ofSeconds(30);
     /** Unanswered keepalives tolerated before the session is declared dead. */
@@ -38,7 +41,8 @@ public final class SshSessions {
      */
     public record ConnectionSpec(String user, String host, int port,
                                  char[] password, String keyPath, char[] passphrase,
-                                 boolean useAgent) {
+                                 boolean useAgent,
+                                 dock.core.config.Site.SftpOptions sftpOptions) {
         public ConnectionSpec {
             // The spec outlives the dial (reconnects re-authenticate from
             // it), while callers wipe their secret arrays as soon as
@@ -50,7 +54,13 @@ public final class SshSessions {
 
         public ConnectionSpec(String user, String host, int port,
                               char[] password, String keyPath, char[] passphrase) {
-            this(user, host, port, password, keyPath, passphrase, false);
+            this(user, host, port, password, keyPath, passphrase, false, null);
+        }
+
+        public ConnectionSpec(String user, String host, int port,
+                              char[] password, String keyPath, char[] passphrase,
+                              boolean useAgent) {
+            this(user, host, port, password, keyPath, passphrase, useAgent, null);
         }
     }
 
@@ -89,6 +99,7 @@ public final class SshSessions {
         }
         SshClient client = SshClient.setUpDefaultClient();
         client.setServerKeyVerifier(verifier);
+
         // Reply-expecting keepalive (OpenSSH ServerAliveInterval semantics).
         // A connection dropped for inactivity — NAT/firewall idle timeout,
         // sleep/wake, server policy — usually delivers no close notification:
@@ -97,16 +108,31 @@ public final class SshSessions {
         // unanswered ones close the session, which triggers the reconnect.
         // (MINA's default here is disabled; the old IGNORE heartbeat was
         // send-only and could not detect a dead peer.)
+        dock.core.config.Site.SftpOptions opts = spec.sftpOptions();
+        long keepaliveMs = secondsOrDefault(opts == null ? null : opts.keepaliveIntervalSec(),
+                KEEPALIVE_INTERVAL).toMillis();
+        int keepaliveMax = opts != null && opts.keepaliveMaxCount() != null && opts.keepaliveMaxCount() > 0
+                ? opts.keepaliveMaxCount()
+                : KEEPALIVE_NO_REPLY_MAX;
         PropertyResolverUtils.updateProperty(client,
-                CoreModuleProperties.HEARTBEAT_INTERVAL.getName(),
-                KEEPALIVE_INTERVAL.toMillis());
+                CoreModuleProperties.HEARTBEAT_INTERVAL.getName(), keepaliveMs);
         PropertyResolverUtils.updateProperty(client,
-                CoreModuleProperties.HEARTBEAT_NO_REPLY_MAX.getName(),
-                KEEPALIVE_NO_REPLY_MAX);
+                CoreModuleProperties.HEARTBEAT_NO_REPLY_MAX.getName(), keepaliveMax);
+
+        // Everything else is opt-in per site: a saved site with no options
+        // block dials exactly as it did before these toggles existed.
+        if (opts != null) {
+            applyDialOptions(client, opts);
+        }
+        Duration connectTimeout = secondsOrDefault(opts == null ? null : opts.timeoutSec(),
+                CONNECT_TIMEOUT);
+        Duration authTimeout = secondsOrDefault(opts == null ? null : opts.timeoutSec(),
+                AUTH_TIMEOUT);
+
         client.start();
         try {
             ClientSession session = client.connect(spec.user(), spec.host(), spec.port())
-                    .verify(CONNECT_TIMEOUT).getSession();
+                    .verify(connectTimeout).getSession();
 
             if (spec.useAgent()) {
                 // Reachability was probed before the dial; a mid-auth
@@ -130,7 +156,7 @@ public final class SshSessions {
             }
 
             try {
-                session.auth().verify(AUTH_TIMEOUT);
+                session.auth().verify(authTimeout);
             } catch (IOException e) {
                 throw new IOException("Authentication failed for " + spec.user() + "@"
                         + spec.host() + " - check the user, password, or key file.", e);
@@ -154,6 +180,36 @@ public final class SshSessions {
         } catch (IOException | RuntimeException e) {
             client.close(true);
             throw e;
+        }
+    }
+
+    private static Duration secondsOrDefault(Integer seconds, Duration fallback) {
+        return seconds != null && seconds > 0 ? Duration.ofSeconds(seconds) : fallback;
+    }
+
+    /**
+     * The per-site toggles that belong to the transport rather than to the
+     * file model. Compression is a negotiation: restricting the proposal to
+     * "none" is what "off" means here, and it is only ever restricted for a
+     * site whose owner opened the options.
+     */
+    private static void applyDialOptions(SshClient client,
+                                         dock.core.config.Site.SftpOptions opts) {
+        client.setCompressionFactories(Boolean.TRUE.equals(opts.compression())
+                ? List.of(BuiltinCompressions.delayedZlib, BuiltinCompressions.zlib,
+                        BuiltinCompressions.none)
+                : List.of(BuiltinCompressions.none));
+        if (opts.transferBufferKb() != null && opts.transferBufferKb() > 0) {
+            int bytes = opts.transferBufferKb() * 1024;
+            PropertyResolverUtils.updateProperty(client,
+                    SftpModuleProperties.READ_BUFFER_SIZE.getName(), bytes);
+            PropertyResolverUtils.updateProperty(client,
+                    SftpModuleProperties.WRITE_BUFFER_SIZE.getName(), bytes);
+        }
+        if (opts.utf8Filenames() != null) {
+            PropertyResolverUtils.updateProperty(client,
+                    SftpModuleProperties.NAME_DECODER_CHARSET.getName(),
+                    opts.utf8Filenames() ? StandardCharsets.UTF_8 : StandardCharsets.ISO_8859_1);
         }
     }
 

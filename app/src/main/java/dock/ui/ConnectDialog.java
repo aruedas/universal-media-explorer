@@ -99,6 +99,19 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
     private static final Color SUCCESS_GREEN = new Color(0x30A46C);
     private final JButton connectButton = new JButton("Connect");
     private final JButton testButton = new JButton("Test Connection");
+    
+    /** SFTP's transport block: a disclosure row whose body only the SFTP leg
+     *  shows. Left closed, the form contributes no options object at all, so
+     *  the site keeps dialing with the app's own defaults. */
+    private JPanel sftpRow;
+    private JPanel sftpOptionsBody;
+    private JCheckBox showSftpOptions;
+    private JCheckBox sftpCompression;
+    private JCheckBox sftpUtf8Filenames;
+    private JTextField sftpTimeoutField;
+    private JTextField sftpKeepaliveField;
+    private JTextField sftpRetriesField;
+    private JTextField sftpBufferField;
 
     /** Names this OS's store; without one the option shows but cannot be had. */
     private static JCheckBox savePasswordBox() {
@@ -277,6 +290,12 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
             shareLabel.setVisible(false);
         }
 
+        // Transport options row: SFTP's own, shown by syncSftpRow().
+        sftpRow = buildSftpOptionsPanel();
+        gc.gridx = 0; gc.gridy = row; gc.gridwidth = 3; gc.fill = GridBagConstraints.HORIZONTAL;
+        form.add(sftpRow, gc);
+        row++;
+
         errorLabel.setForeground(ERROR_RED);
         errorLabel.setFont(FontRegistry.ui());
         errorLabel.setVisible(false);
@@ -285,6 +304,119 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
 
         saveSession.setSelected(true);
         return form;
+    }
+
+    /** Builds the disclosure row and the option body it opens. */
+    private JPanel buildSftpOptionsPanel() {
+        JPanel wrapper = new JPanel();
+        wrapper.setLayout(new BoxLayout(wrapper, BoxLayout.Y_AXIS));
+        wrapper.setOpaque(false);
+
+        showSftpOptions = new JCheckBox("Transport options");
+        showSftpOptions.setFont(FontRegistry.uiMedium(12));
+        showSftpOptions.setForeground(muted());
+        showSftpOptions.setOpaque(false);
+        showSftpOptions.setFocusable(false);
+        showSftpOptions.addActionListener(e -> {
+            sftpOptionsBody.setVisible(showSftpOptions.isSelected());
+            pack();
+        });
+
+        JPanel body = new JPanel(new GridBagLayout());
+        body.setOpaque(false);
+        body.setBorder(BorderFactory.createEmptyBorder(2, 16, 2, 0));
+        var gc = new GridBagConstraints();
+        gc.insets = new Insets(2, 2, 2, 8);
+        gc.anchor = GridBagConstraints.LINE_START;
+        int r = 0;
+
+        sftpCompression = optionCheck("Compress the session (CPU for bandwidth)");
+        sftpUtf8Filenames = optionCheck("Filenames are UTF-8 (off: legacy ISO-8859-1)");
+        gc.gridx = 0; gc.gridy = r; gc.gridwidth = 2;
+        body.add(sftpCompression, gc); r++;
+        body.add(sftpUtf8Filenames, gc); r++;
+        gc.gridwidth = 1;
+
+        sftpTimeoutField = optionNum(body, gc, r++, "Connect/auth timeout (s):", "30");
+        sftpKeepaliveField = optionNum(body, gc, r++, "Keepalive interval (s):", "30");
+        sftpRetriesField = optionNum(body, gc, r++, "Keepalive retries:", "3");
+        sftpBufferField = optionNum(body, gc, r, "Transfer buffer (KB):", "64");
+
+        sftpOptionsBody = body;
+        sftpOptionsBody.setVisible(false);
+        wrapper.add(showSftpOptions);
+        wrapper.add(sftpOptionsBody);
+        wrapper.setVisible(false);
+        return wrapper;
+    }
+
+    private JCheckBox optionCheck(String text) {
+        JCheckBox box = new JCheckBox(text);
+        box.setFont(FontRegistry.ui(12));
+        box.setOpaque(false);
+        return box;
+    }
+
+    /** A caption with its numeric field; returns the field. */
+    private JTextField optionNum(JPanel body, GridBagConstraints gc, int row,
+                                 String caption, String initial) {
+        gc.gridx = 0; gc.gridy = row;
+        JLabel captionLabel = label(caption);
+        captionLabel.setFont(FontRegistry.ui(12));
+        body.add(captionLabel, gc);
+        JTextField field = new JTextField(initial, 5);
+        field.setFont(FontRegistry.ui(12));
+        gc.gridx = 1;
+        body.add(field, gc);
+        return field;
+    }
+
+    @Override
+    public dock.core.config.Site.SftpOptions sftpOptions() {
+        if (!sftpRow.isVisible() || !showSftpOptions.isSelected()) return null;
+        return new dock.core.config.Site.SftpOptions(
+                sftpCompression.isSelected(),
+                parseIntSafe(sftpTimeoutField.getText()),
+                parseIntSafe(sftpKeepaliveField.getText()),
+                parseIntSafe(sftpRetriesField.getText()),
+                parseIntSafe(sftpBufferField.getText()),
+                sftpUtf8Filenames.isSelected());
+    }
+
+    @Override
+    public void setSftpOptions(dock.core.config.Site.SftpOptions opts) {
+        if (opts != null) {
+            sftpCompression.setSelected(Boolean.TRUE.equals(opts.compression()));
+            sftpUtf8Filenames.setSelected(!Boolean.FALSE.equals(opts.utf8Filenames()));
+            sftpTimeoutField.setText(numberOr(opts.timeoutSec(), "30"));
+            sftpKeepaliveField.setText(numberOr(opts.keepaliveIntervalSec(), "30"));
+            sftpRetriesField.setText(numberOr(opts.keepaliveMaxCount(), "3"));
+            sftpBufferField.setText(numberOr(opts.transferBufferKb(), "64"));
+            showSftpOptions.setSelected(true);
+        } else {
+            showSftpOptions.setSelected(false);
+        }
+        syncSftpRow();
+    }
+
+    /** The row belongs to SFTP alone; its body follows the disclosure. */
+    private void syncSftpRow() {
+        boolean sftp = protocol() == Protocol.SFTP;
+        sftpRow.setVisible(sftp);
+        sftpOptionsBody.setVisible(sftp && showSftpOptions.isSelected());
+    }
+
+    private static String numberOr(Integer value, String fallback) {
+        return value != null && value > 0 ? String.valueOf(value) : fallback;
+    }
+
+    private static Integer parseIntSafe(String text) {
+        try {
+            int v = Integer.parseInt(text.trim());
+            return v > 0 ? v : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private Protocol protocol() {
@@ -325,6 +457,7 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
                 }
             }
         }
+        syncSftpRow();
         applyAuthMode();
     }
 
@@ -768,6 +901,16 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
 
     public boolean shareRowVisible() {
         return shareLabel.isVisible() && shareField.isVisible();
+    }
+
+    /** The transport-options disclosure row — SFTP alone has one. */
+    public boolean transportRowVisible() {
+        return sftpRow.isVisible();
+    }
+
+    /** True while the option fields themselves are on screen. */
+    public boolean transportOptionsOpen() {
+        return sftpOptionsBody.isVisible();
     }
 
     /** True when every row the fragment contributes is on screen. */
