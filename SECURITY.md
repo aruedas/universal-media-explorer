@@ -26,7 +26,6 @@ Please do **not** open a public issue.
 
 - Preferred: use GitHub's *Report a vulnerability* (private security
   advisory) on this repository.
-- Or email: **radviger@gmail.com** with `[security]` in the subject.
 
 Include what you found, how to reproduce it, and which version you
 tested. You will get an acknowledgement that the report arrived; fix
