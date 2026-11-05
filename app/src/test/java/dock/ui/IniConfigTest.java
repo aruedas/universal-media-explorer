@@ -29,9 +29,11 @@ class IniConfigTest {
             local3=true
             home3=/srv/storage
             name3=srv-index
-            ; site2 has explicit keys written by an earlier toggle.
+            ; site2 has explicit keys written by an earlier toggle, and the
+            ; operator's own SSH account.
             serverMoviesEnabled2=true
             serverSeriesEnabled2=false
+            user2=srv-operator
             site2=198.51.100.20
             name2=srv-upload
             ; site7 is a plain regular host: no M/S keys at all.
@@ -67,6 +69,21 @@ class IniConfigTest {
         IniConfig config = IniConfig.load(ini);
         IniConfig.MediaServer upload = config.servers().get(1);
         assertFalse(upload.seriesEnabled(), "the operator's written-off switch stays off");
+    }
+
+    @Test
+    void aServerWithAnAccountDialsAsIt() throws IOException {
+        IniConfig.MediaServer upload = IniConfig.load(write(FLEET)).servers().get(1);
+        assertEquals("srv-operator", upload.user());
+        assertEquals("srv-operator", Sidebar.fleetUser(upload));
+    }
+
+    @Test
+    void aServerWithoutOneIsNamedNotGuessed() throws IOException {
+        IniConfig.MediaServer index = IniConfig.load(write(FLEET)).servers().get(0);
+        assertEquals("", index.user(), "an absent user<N> key reads as empty");
+        assertEquals(Sidebar.USER_UNSET, Sidebar.fleetUser(index),
+                "the placeholder names what is missing instead of dialing a guessed account");
     }
 
     @Test

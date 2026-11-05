@@ -26,7 +26,7 @@ public final class IniConfig {
 
     public record MediaServer(int index, String name, String host, String home,
                               int port, boolean indexOnly, boolean moviesEnabled,
-                              boolean seriesEnabled) {}
+                              boolean seriesEnabled, String user) {}
 
     public record RespaldoDrive(int index, String root, boolean external,
                                 boolean moviesEnabled, boolean seriesEnabled) {}
@@ -91,8 +91,12 @@ public final class IniConfig {
             // INI is the operator's choice and always wins.
             boolean movies = parseBool(kv.get("serverMoviesEnabled" + idx), !indexOnly);
             boolean series = parseBool(kv.get("serverSeriesEnabled" + idx), !indexOnly);
+            // The SSH user lives here, in the operator's own file, and never
+            // in the source: a published repo must not name a fleet account.
+            // An absent key is not defaulted to a guess - see Sidebar.
+            String user = kv.getOrDefault("user" + idx, "").trim();
             servers.add(new MediaServer(idx, name, host, home, port,
-                    indexOnly, movies, series));
+                    indexOnly, movies, series, user));
         }
 
         List<RespaldoDrive> drives = new ArrayList<>();

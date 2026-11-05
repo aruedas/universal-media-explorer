@@ -352,14 +352,28 @@ public final class Sidebar extends JPanel {
                 @Override public void mouseClicked(MouseEvent e) {
                     if (e.getClickCount() >= 2) {
                         Site site = new Site(srv.name(), srv.host(), 22,
-                                "srv-user", null);
+                                fleetUser(srv), null);
                         host.connectSite(site);
                     }
                 }
             });
             row.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-            row.setToolTipText(srv.host() + ":" + srv.port() + srv.home());
+            row.setToolTipText(srv.host() + ":" + srv.port() + srv.home()
+                    + (srv.user().isBlank() ? "  (user" + srv.index()
+                            + " not set in the fleet INI)" : ""));
         }
+    }
+
+    /**
+     * The SSH user a fleet row dials as, taken from {@code user<N>} in the
+     * operator's own INI. A row without one gets a placeholder whose name
+     * says what is missing: the shipped source must not carry a fleet
+     * account, so guessing one here would put back what the config removed.
+     */
+    static final String USER_UNSET = "user-not-set-in-fleet-ini";
+
+    static String fleetUser(IniConfig.MediaServer srv) {
+        return srv.user().isBlank() ? USER_UNSET : srv.user();
     }
 
     // ── Respaldo ─────────────────────────────────────────────────────
