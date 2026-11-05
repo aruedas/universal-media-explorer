@@ -17,6 +17,8 @@ terminal, viewer, and editor.
 
 This is a fork of [Radviger/universal-explorer](https://github.com/Radviger/universal-explorer), renamed to Universal Media Explorer for the operator's media fleet. The rename is a local decision; upstream remains Universal Explorer. The fork preserves GPL v3 attribution and the pull path from Radviger.
 
+Some commits carry `WorkGroupID:` and `NodeID(s):` trailers. They come from `noderr/`, an internal documentation set — one spec per component, a decision log, a tracker — that records how each change was chosen and verified. That set describes this codebase but is not published with it, so those names have no files behind them in this repository.
+
 ## Why this exists
 
 My file client for many years was WinSCP — a good free tool this
