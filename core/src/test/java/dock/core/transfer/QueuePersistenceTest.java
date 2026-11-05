@@ -15,6 +15,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -33,15 +34,16 @@ class QueuePersistenceTest {
 
     private Named namedStore() {
         Path file = dir.resolve("queue-" + System.nanoTime() + ".json");
-        return new Named(new QueuePersistence(file), file);
+        return new Named(new QueuePersistence(file), file, new ArrayList<>());
     }
 
-    private record Named(QueuePersistence store, Path file) {}
+    /** A store, its file, and every trouble it reported along the way. */
+    private record Named(QueuePersistence store, Path file, List<String> problems) {}
 
     /** A queue file plus the address book that wrote it. */
     private Named write(TransferJob job, Map<FileSystem, String> names) {
         Named n = namedStore();
-        n.store.saveNow(List.of(job), QueuePersistence.siteOf(names));
+        n.store.saveNow(List.of(job), QueuePersistence.siteOf(names), n.problems::add);
         return n;
     }
 
@@ -58,7 +60,7 @@ class QueuePersistenceTest {
         TransferJob done = file(LocalFs.INSTANCE, "C:\\a.mp4", LocalFs.INSTANCE, "C:\\b.mp4");
         done.settle(TransferJob.State.DONE);
 
-        n.store.saveNow(List.of(done), QueuePersistence.siteOf(Map.of()));
+        n.store.saveNow(List.of(done), QueuePersistence.siteOf(Map.of()), n.problems::add);
 
         assertFalse(Files.exists(n.file), "a finished transfer has nothing to say to the next launch");
     }
@@ -80,7 +82,7 @@ class QueuePersistenceTest {
         job.setState(TransferJob.State.WAITING);
         Named n = write(job, Map.of());
 
-        QueuePersistence.QueueRecord loaded = n.store.load();
+        QueuePersistence.QueueRecord loaded = n.store.load(n.problems::add);
         assertNotNull(loaded);
         assertEquals(1, loaded.jobs().size());
         assertEquals("srv-upload", loaded.jobs().get(0).dstSession());
@@ -93,7 +95,7 @@ class QueuePersistenceTest {
         TransferJob job = file(LocalFs.INSTANCE, "C:\\a.mp4", remote, "/b.mp4");
         Named n = write(job, Map.of(remote, "srv-upload"));
 
-        QueuePersistence.JobRecord rec = n.store.load().jobs().get(0);
+        QueuePersistence.JobRecord rec = n.store.load(n.problems::add).jobs().get(0);
         assertEquals("local", rec.srcSession());
         assertEquals("srv-upload", rec.dstSession());
     }
@@ -108,7 +110,8 @@ class QueuePersistenceTest {
 
         // Fresh process: nothing is connected, and nothing here dials out.
         TransferEngine e = relaunch(n);
-        assertEquals(1, n.store.restoreInto(e, LocalFs.INSTANCE, QueuePersistence.liveOf(Map.of())));
+        assertEquals(1, n.store.restoreInto(e, LocalFs.INSTANCE,
+                QueuePersistence.liveOf(Map.of()), n.problems::add));
 
         TransferJob waiting = e.snapshot().get(0);
         assertEquals(TransferJob.State.WAITING, waiting.state());
@@ -149,7 +152,7 @@ class QueuePersistenceTest {
         Named n = write(job, Map.of(index, "srv-index", upload, "srv-upload"));
 
         TransferEngine e = relaunch(n);
-        n.store.restoreInto(e, LocalFs.INSTANCE, QueuePersistence.liveOf(Map.of()));
+        n.store.restoreInto(e, LocalFs.INSTANCE, QueuePersistence.liveOf(Map.of()), n.problems::add);
         TransferJob waited = e.snapshot().get(0);
 
         assertEquals(0, e.sessionOpened("srv-upload", upload),
@@ -193,7 +196,7 @@ class QueuePersistenceTest {
         Named n = write(job, Map.of());
 
         TransferEngine e = relaunch(n);
-        n.store.restoreInto(e, LocalFs.INSTANCE, QueuePersistence.liveOf(Map.of()));
+        n.store.restoreInto(e, LocalFs.INSTANCE, QueuePersistence.liveOf(Map.of()), n.problems::add);
 
         TransferJob back = e.snapshot().get(0);
         assertEquals(TransferJob.State.FAILED, back.state());
@@ -296,6 +299,58 @@ class QueuePersistenceTest {
 
         assertEquals(1, e.restoreQueue(LocalFs.INSTANCE),
                 "a queue written by a newer build still restores its rows");
+    }
+
+    // ---- when the file itself refuses ----
+
+    /**
+     * A queue that cannot persist is not allowed to go quiet: the write dies
+     * on an endpoint no test can accidentally make writable — a folder where
+     * the JSON belongs.
+     */
+    @Test
+    void aQueueFileThatWillNotWriteReportsWhy() throws IOException {
+        Path blocked = dir.resolve("queue-blocked.json");
+        Files.createDirectory(blocked);
+        QueuePersistence store = new QueuePersistence(blocked);
+        List<String> problems = new ArrayList<>();
+
+        store.saveNow(List.of(file(LocalFs.INSTANCE, "C:\\a.mp4",
+                        LocalFs.INSTANCE, "C:\\b.mp4")),
+                QueuePersistence.siteOf(Map.of()), problems::add);
+
+        assertEquals(1, problems.size(), "the queue keeps working in memory, and says so");
+        assertTrue(problems.get(0).startsWith("Could not save the transfer queue"),
+                problems.toString());
+    }
+
+    @Test
+    void aCorruptQueueFileSaysWhyItRestoredNothing() throws IOException {
+        Named n = namedStore();
+        Files.writeString(n.file, "{ not the queue we expect }");
+        TransferEngine e = relaunch(n);
+
+        assertEquals(0, n.store.restoreInto(e, LocalFs.INSTANCE,
+                QueuePersistence.liveOf(Map.of()), n.problems::add));
+        assertEquals(1, n.problems.size(), "an unreadable queue is reported, not skipped");
+        assertTrue(n.problems.get(0).startsWith("Could not read the transfer queue"),
+                n.problems.toString());
+    }
+
+    /** The contract the shell subscribes to: persistence trouble reaches its
+     *  problem listeners, so it can become something the operator sees. */
+    @Test
+    void theEngineForwardsPersistenceTroubleToItsListeners() throws IOException {
+        Named n = namedStore();
+        Files.writeString(n.file, "not json at all");
+        TransferEngine e = relaunch(n);
+        List<String> heard = new ArrayList<>();
+        e.addProblemListener(heard::add);
+
+        assertEquals(0, e.restoreQueue(LocalFs.INSTANCE));
+        assertEquals(1, heard.size(), "core reports; the shell decides how to show it");
+        assertTrue(heard.get(0).startsWith("Could not read the transfer queue"),
+                heard.toString());
     }
 
     // ---- helpers ----

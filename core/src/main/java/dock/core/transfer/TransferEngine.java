@@ -14,6 +14,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Semaphore;
+import java.util.function.Consumer;
 
 /**
  * The transfer queue. Jobs run on virtual threads (up to {@value #WORKERS}
@@ -32,6 +33,10 @@ public final class TransferEngine {
     private final Map<UUID, ConflictDecision> batchDecisions = new ConcurrentHashMap<>();
     private final Semaphore permits = new Semaphore(WORKERS);
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
+    /** Work the queue could not do for reasons outside the transfer itself —
+     *  a queue file that will not write, a row that will not come back. The
+     *  shell turns these into something the operator can see. */
+    private final List<Consumer<String>> problemListeners = new CopyOnWriteArrayList<>();
     private final Object conflictLock = new Object();
     private final QueuePersistence persistence;
     /** Live connections and the saved site each came from — the queue file's
@@ -67,7 +72,8 @@ public final class TransferEngine {
      * @return number of rows restored
      */
     public int restoreQueue(FileSystem localFs) {
-        return persistence.restoreInto(this, localFs, QueuePersistence.liveOf(sessionNames));
+        return persistence.restoreInto(this, localFs, QueuePersistence.liveOf(sessionNames),
+                this::fireProblem);
     }
 
     /**
@@ -121,7 +127,7 @@ public final class TransferEngine {
     }
 
     private void saveQueue() {
-        persistence.saveAsync(jobs, QueuePersistence.siteOf(sessionNames));
+        persistence.saveAsync(jobs, QueuePersistence.siteOf(sessionNames), this::fireProblem);
     }
 
     public void setResolver(ConflictResolver resolver) {
@@ -189,6 +195,16 @@ public final class TransferEngine {
 
     public void addListener(Runnable l) {
         listeners.add(l);
+    }
+
+    /**
+     * Subscribes to the queue's own troubles — a queue file that refused to
+     * write, a stored row that refused to load. Not a transfer failing: those
+     * stay on their row. Listeners run on whichever thread noticed the
+     * problem, so one that touches Swing must not assume it holds the EDT.
+     */
+    public void addProblemListener(Consumer<String> l) {
+        problemListeners.add(l);
     }
 
     /** Copies or moves the selected entries from srcDir into dstDir. */
@@ -548,5 +564,9 @@ public final class TransferEngine {
 
     private void fireChanged() {
         for (Runnable l : listeners) l.run();
+    }
+
+    private void fireProblem(String problem) {
+        for (Consumer<String> l : problemListeners) l.accept(problem);
     }
 }

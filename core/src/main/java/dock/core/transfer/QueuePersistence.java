@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -26,6 +27,10 @@ import java.util.function.Function;
  * run's queue only.
  *
  * Saves are debounced: rapid queue changes coalesce into one write.
+ *
+ * A file this store cannot write or read is never swallowed here: the reason
+ * goes to the problem sink the caller hands in, which is how a queue that
+ * failed to persist reaches the operator rather than a console no one opens.
  */
 public final class QueuePersistence {
 
@@ -89,8 +94,12 @@ public final class QueuePersistence {
      * Saves the unfinished part of the queue. Debounced: rapid calls
      * coalesce into one write. {@code siteOf} names an endpoint; a job with
      * an endpoint it cannot name is left out of the file.
+     *
+     * <p>A write that fails is not fatal — the queue keeps working in memory
+     * — so the reason travels to {@code problems} for whoever can show it.
      */
-    public void saveAsync(List<TransferJob> jobs, Function<FileSystem, String> siteOf) {
+    public void saveAsync(List<TransferJob> jobs, Function<FileSystem, String> siteOf,
+                          Consumer<String> problems) {
         lastSaveRequest = System.currentTimeMillis();
         synchronized (this) {
             if (saveThread == null || !saveThread.isAlive()) {
@@ -101,7 +110,7 @@ public final class QueuePersistence {
                             Thread.sleep(DEBOUNCE_MS);
                             lastRequest = lastSaveRequest;
                         } while (System.currentTimeMillis() - lastRequest < DEBOUNCE_MS);
-                        saveNow(jobs, siteOf);
+                        saveNow(jobs, siteOf, problems);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
@@ -111,7 +120,8 @@ public final class QueuePersistence {
     }
 
     /** Writes the file now — what the debounce eventually does. */
-    void saveNow(List<TransferJob> jobs, Function<FileSystem, String> siteOf) {
+    void saveNow(List<TransferJob> jobs, Function<FileSystem, String> siteOf,
+                 Consumer<String> problems) {
         try {
             List<JobRecord> records = jobs.stream()
                     // A failure the user never answered is still unfinished
@@ -129,7 +139,7 @@ public final class QueuePersistence {
             MAPPER.writeValue(queueFile.toFile(), queue);
         } catch (IOException e) {
             // Persistence failure is non-fatal; the queue keeps working in memory.
-            System.err.println("Failed to save queue: " + e.getMessage());
+            problems.accept("Could not save the transfer queue: " + why(e));
         }
     }
 
@@ -144,11 +154,12 @@ public final class QueuePersistence {
      * @param engine     the engine to restore rows into
      * @param localFs    this machine's filesystem, standing in for "local"
      * @param liveOf     the open connection for a saved session, or null
+     * @param problems   where a row that could not come back is reported
      * @return the number of rows restored
      */
     public int restoreInto(TransferEngine engine, FileSystem localFs,
-                           Function<String, FileSystem> liveOf) {
-        QueueRecord queue = load();
+                           Function<String, FileSystem> liveOf, Consumer<String> problems) {
+        QueueRecord queue = load(problems);
         if (queue == null || queue.jobs() == null || queue.jobs().isEmpty()) return 0;
         int restored = 0;
         for (JobRecord record : queue.jobs()) {
@@ -156,30 +167,27 @@ public final class QueuePersistence {
                 TransferJob job = toJob(record, localFs, liveOf);
                 if (job != null && engine.addRestoredJob(job)) restored++;
             } catch (RuntimeException e) {
-                System.err.println("Failed to restore job: " + e.getMessage());
+                problems.accept("Could not restore a queued transfer: " + why(e));
             }
         }
         return restored;
     }
 
     /** Loads the persisted queue; null when the file is missing or unreadable. */
-    public QueueRecord load() {
+    public QueueRecord load(Consumer<String> problems) {
         if (!Files.exists(queueFile)) return null;
         try {
             return MAPPER.readValue(queueFile.toFile(), QueueRecord.class);
         } catch (IOException e) {
-            System.err.println("Failed to load queue: " + e.getMessage());
+            problems.accept("Could not read the transfer queue: " + why(e));
             return null;
         }
     }
 
-    /** Deletes the persisted queue file. */
-    public void clear() {
-        try {
-            Files.deleteIfExists(queueFile);
-        } catch (IOException e) {
-            System.err.println("Failed to clear queue: " + e.getMessage());
-        }
+    /** The shortest true sentence about a failure; some carry no message. */
+    private static String why(Throwable problem) {
+        String text = problem.getMessage();
+        return text == null ? problem.toString() : text;
     }
 
     /** The queue file's path — diagnostics and tests read it back. */

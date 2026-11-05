@@ -91,7 +91,8 @@ class StatusBarProgressTest {
                 """);
         TransferEngine engine = new TransferEngine();
         new dock.core.transfer.QueuePersistence(queue)
-                .restoreInto(engine, LocalFs.INSTANCE, site -> null);
+                .restoreInto(engine, LocalFs.INSTANCE, site -> null,
+                        problem -> org.junit.jupiter.api.Assertions.fail(problem));
         StatusBar bar = new StatusBar(engine, () -> {});
 
         bar.pollForTest();

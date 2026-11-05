@@ -238,7 +238,8 @@ class TransferPopupTest {
                   "error":null,"resumeFrom":0}]}
                 """).formatted(json(src.toString()), json(server.resolve("movie.mkv").toString())));
         new dock.core.transfer.QueuePersistence(queueFile)
-                .restoreInto(engine, LocalFs.INSTANCE, site -> null);
+                .restoreInto(engine, LocalFs.INSTANCE, site -> null,
+                        problem -> org.junit.jupiter.api.Assertions.fail(problem));
 
         popup.toggleForTest();
         popup.refreshForTest();

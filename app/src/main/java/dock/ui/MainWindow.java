@@ -93,6 +93,9 @@ public final class MainWindow extends JFrame {
 
         dock.core.transfer.TransferEngine.GLOBAL.setResolver(ConflictDialog.resolver(this));
         dock.core.transfer.TransferEngine.GLOBAL.addListener(this::onTransfersChanged);
+        // Before the restore, so a queue file that fails on the way in is
+        // heard rather than only printed where nobody is looking.
+        dock.core.transfer.TransferEngine.GLOBAL.addProblemListener(this::onQueueProblem);
 
         // Rows the last run left unfinished come back now; the ones whose
         // session isn't open yet wait for it rather than being dropped.
@@ -308,6 +311,12 @@ public final class MainWindow extends JFrame {
     private void onTransfersChanged() {
         // Called from worker threads; coalesce onto the EDT.
         javax.swing.SwingUtilities.invokeLater(this::handleTransfersChanged);
+    }
+
+    /** Trouble the queue had persisting itself, not transferring: a file
+     *  that would not write or a stored row that would not come back. */
+    private void onQueueProblem(String problem) {
+        Toast.show(this, problem, Glyphs.WARNING);
     }
 
     private void handleTransfersChanged() {
