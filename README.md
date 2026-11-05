@@ -13,6 +13,10 @@ terminal, viewer, and editor.
 
 </div>
 
+## Fork and attribution
+
+This is a fork of [Radviger/universal-explorer](https://github.com/Radviger/universal-explorer), renamed to Universal Media Explorer for the operator's media fleet. The rename is a local decision; upstream remains Universal Explorer. The fork preserves GPL v3 attribution and the pull path from Radviger.
+
 ## Why this exists
 
 My file client for many years was WinSCP — a good free tool this
