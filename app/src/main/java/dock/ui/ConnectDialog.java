@@ -2,6 +2,7 @@ package dock.ui;
 
 import dock.kit.FontRegistry;
 import dock.kit.Glyphs;
+import dock.kit.Toast;
 import dock.kit.Tokens;
 import dock.kit.connect.AuthMode;
 import dock.kit.connect.ConnectionFragment;
@@ -645,20 +646,23 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
             try {
                 dock.core.session.Session session = dial.dial();
                 Site saved = site;
+                String unrecorded = null;
                 if (saveSession.isVisible() && saveSession.isSelected()) {
                     try {
                         saved = persist(site);
-                        saveCredentials(saved, mode, password, passphrase);
+                        unrecorded = saveCredentials(saved, mode, password, passphrase);
                     } catch (Exception saveError) {
                         // Saving must never kill the session; surface as a toast later.
-                        System.err.println("could not save session: " + saveError);
+                        unrecorded = message(saveError);
                     }
                 }
                 final dock.core.session.Session opened = session;
                 final Site done = saved;
+                final String unsaved = unrecorded;
                 SwingUtilities.invokeLater(() -> {
                     dispose();
                     onConnected.connected(opened, done);
+                    if (unsaved != null) toast("Could not save the session: " + unsaved);
                 });
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
@@ -693,11 +697,12 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
         Thread.ofVirtual().name("dock-save-session").start(() -> {
             try {
                 Site saved = persist(site);
-                saveCredentials(saved, mode, password, passphrase);
+                final String unsaved = saveCredentials(saved, mode, password, passphrase);
                 final Site done = saved;
                 SwingUtilities.invokeLater(() -> {
                     dispose();
                     onSave.saved(done);
+                    if (unsaved != null) toast("Could not save the session: " + unsaved);
                 });
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
@@ -753,8 +758,9 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
     }
 
     /** The opted-in credential saves; a refusal must not kill an
-     *  otherwise-complete connect or save. */
-    private void saveCredentials(Site site, AuthMode mode, char[] password, char[] passphrase) {
+     *  otherwise-complete connect or save. Returns the reason nothing was
+     *  stored, or null when everything asked for is on file. */
+    private String saveCredentials(Site site, AuthMode mode, char[] password, char[] passphrase) {
         try {
             if (mode.password() && savePassword.isSelected()
                     && password != null && password.length > 0) {
@@ -763,9 +769,22 @@ public final class ConnectDialog extends JDialog implements ConnectForm {
             if (mode.key() && passphrase.length > 0) {
                 CredentialManager.save(site.keySecretTarget(), new String(passphrase));
             }
+            return null;
         } catch (Exception saveError) {
-            System.err.println("could not save session: " + saveError);
+            return message(saveError);
         }
+    }
+
+    /** Something that must not interrupt the flow, announced where the
+     *  operator is looking once this dialog has closed. */
+    private void toast(String message) {
+        Toast.show(getOwner(), message, Glyphs.WARNING);
+    }
+
+    /** The shortest true sentence about a failure. */
+    private static String message(Throwable problem) {
+        String text = problem.getMessage();
+        return text == null ? problem.toString() : text;
     }
 
     // ---- ConnectForm (the fragment's view of this dialog) ----
